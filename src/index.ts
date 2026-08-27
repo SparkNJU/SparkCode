@@ -1,0 +1,195 @@
+#!/usr/bin/env node
+
+// index.ts — CLI 入口 + REPL
+
+import 'dotenv/config'  // 加载 .env 文件（必须在最前面）
+
+import * as readline from 'node:readline/promises'
+import { stdin, stdout, stderr } from 'node:process'
+import { loadConfig } from './config.js'
+import { Context } from './core/context.js'
+import { LlmAdapter } from './core/llm.js'
+import { SparkAgent } from './core/loop.js'
+import type { SparkConfig } from './config.js'
+
+async function main(): Promise<void> {
+  // 1. 解析配置
+  const config = loadConfig(process.argv)
+
+  // 2. 创建核心服务
+  const ctx = createContext(config)
+
+  // 3. 创建 Agent
+  const agent = new SparkAgent(ctx, config)
+
+  // 4. CLI 模式分支
+  if (config.oneShotTask) {
+    await runOneShot(agent, config)
+  } else {
+    await runRepl(agent, config)
+  }
+}
+
+/** 创建核心服务上下文 */
+function createContext(config: SparkConfig): Context {
+  const ctx = new Context()
+  const apiKey = process.env[config.provider.apiKeyEnv]
+  if (!apiKey) {
+    console.error('错误：未找到 API Key')
+    process.exit(1)
+  }
+
+  const llm = new LlmAdapter({
+    apiKey,
+    baseURL: config.provider.baseURL,
+    ctx,
+  })
+
+  ctx.provide('llm', llm)
+  ctx.provide('config', config)
+
+  return ctx
+}
+
+/** one-shot 模式：执行任务 → 打印结果 → 退出 */
+async function runOneShot(agent: SparkAgent, config: SparkConfig): Promise<void> {
+  let finalText = ''
+
+  // 订阅 assistant/chunk 收集最终文本
+  agent.ctx.events.on<{ turn: number; step: number; chunk: { kind: string; text?: string } }>(
+    'assistant/chunk',
+    (data) => {
+      if (data.chunk.kind === 'content' && data.chunk.text) {
+        finalText += data.chunk.text
+        if (!config.printMode) {
+          stdout.write(data.chunk.text)
+        }
+      }
+    },
+  )
+
+  agent.followup(config.oneShotTask!)
+  await agent.waitForTurnEnd()
+
+  if (config.printMode) {
+    stdout.write(finalText + '\n')
+  }
+}
+
+/** 交互式 REPL */
+async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
+  const rl = readline.createInterface({
+    input: stdin,
+    output: stdout,
+    terminal: true,
+  })
+
+  let interruptCount = 0
+
+  // Ctrl+C 处理
+  let cancelled = false
+  const onSigint = (): void => {
+    if (!cancelled) {
+      cancelled = true
+      agent.cancel('user-interrupt')
+      stdout.write('\n(已退出)\n')
+      rl.close()
+    }
+    // 二次 Ctrl+C 直接强制退出
+    process.exit(0)
+  }
+
+  process.on('SIGINT', onSigint)
+
+  // 事件渲染
+  setupEventRendering(agent, config)
+
+  // 打印欢迎信息
+  stdout.write(`\n  Spark Code — 编程智能体\n`)
+  stdout.write(`  模型: ${config.model}\n`)
+  stdout.write(`  工作目录: ${config.workspace}\n`)
+  stdout.write(`  输入任务开始对话，Ctrl+C 取消/退出\n\n`)
+
+  // REPL 循环
+  while (true) {
+    try {
+      const input = await rl.question('> ')
+      interruptCount = 0 // 重置中断计数
+
+      const trimmed = input.trim()
+      if (!trimmed) continue
+      if (trimmed === '/exit' || trimmed === '/quit') break
+
+      agent.followup(trimmed)
+      await agent.waitForTurnEnd()
+      stdout.write('\n')
+    } catch {
+      // readline 被关闭（Ctrl+C 或 /exit）
+      break
+    }
+  }
+
+  process.removeListener('SIGINT', onSigint)
+  rl.close()
+}
+
+/** 设置事件渲染（纯函数渲染，与 Web 共用逻辑） */
+function setupEventRendering(agent: SparkAgent, config: SparkConfig): void {
+  const ctx = agent.ctx
+
+  // assistant/chunk → 流式打印文本
+  ctx.events.on<{ turn: number; step: number; chunk: { kind: string; text?: string } }>(
+    'assistant/chunk',
+    (data) => {
+      if (data.chunk.kind === 'content' && data.chunk.text) {
+        stdout.write(data.chunk.text)
+      }
+    },
+  )
+
+  // tool/call → 工具调用提示（M1 不触发，M2 启用）
+  ctx.events.on<{ name: string; arguments: string }>(
+    'tool/call',
+    (data) => {
+      const color = config.noColor ? '' : '\x1b[36m' // cyan
+      const reset = config.noColor ? '' : '\x1b[0m'
+      stdout.write(`\n${color}🔧 ${data.name}(${truncate(data.arguments, 100)})${reset}\n`)
+    },
+  )
+
+  // tool/result → 工具结果（M1 不触发）
+  ctx.events.on<{ message: { content: string; isError: boolean } }>(
+    'tool/result',
+    (data) => {
+      const isError = data.message.isError
+      const color = config.noColor ? '' : isError ? '\x1b[31m' : '\x1b[32m' // red/green
+      const reset = config.noColor ? '' : '\x1b[0m'
+      const prefix = isError ? '✗' : '✓'
+      const content = truncate(data.message.content, 500)
+      stdout.write(`${color}${prefix} ${content}${reset}\n`)
+    },
+  )
+
+  // turn/end → 回合结束状态
+  ctx.events.on<{ turn: number; reason: { kind: string } }>(
+    'turn/end',
+    (data) => {
+      if (data.reason.kind === 'error') {
+        const color = config.noColor ? '' : '\x1b[31m'
+        const reset = config.noColor ? '' : '\x1b[0m'
+        stdout.write(`\n${color}✗ 回合出错${reset}\n`)
+      }
+    },
+  )
+}
+
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen) + '…'
+}
+
+// 启动
+main().catch((error) => {
+  stderr.write(`\n致命错误: ${error instanceof Error ? error.message : error}\n`)
+  process.exit(1)
+})

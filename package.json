@@ -1,0 +1,28 @@
+{
+  "name": "spark-code",
+  "version": "0.1.0",
+  "description": "编程智能体 — 从零实现的 coding agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "spark": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "spark": "tsx src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "openai": "^7.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
