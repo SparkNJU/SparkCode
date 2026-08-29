@@ -829,12 +829,21 @@ Options:
 
 ### 7.2 交互模式（REPL）
 
+**输入模式**：
+
+| 前缀 | 模式 | 行为 |
+|---|---|---|
+| `!` | 命令模式 | 直接执行 Shell 命令，不经过 LLM，不消耗 token |
+| 无 | 对话模式 | 发送给 LLM，由 Agent 决定是否调用工具 |
+
 ```mermaid
 sequenceDiagram
   participant U as 用户
   participant T as Terminal TUI
   participant A as Agent
   participant L as LLM
+
+  Note over U,T: 对话模式（无前缀）
   U->>T: 输入任务文本
   T->>A: followup(task)
   A->>A: 认领输入，启动 turn
@@ -849,10 +858,17 @@ sequenceDiagram
   T-->>U: 渲染工具结果（成功/失败着色）
   A-->>T: turn/end
   T-->>U: 回合完成，回到输入
+
+  Note over U,T: 命令模式（!前缀）
+  U->>T: !ls -la
+  T->>T: ToolRegistry.execute(bash, {command:"ls -la"})
+  T-->>U: 直接打印命令输出
 ```
 
 ### 7.3 TUI 渲染规范
 
+- **欢迎消息**：启动时显示模型名称、工作目录、`!` 前缀命令模式提示。
+- **命令模式**（`!` 前缀）：直接打印命令输出，成功绿色 `$ 命令`，失败红色 `$ 命令`。
 - **流式文本**：模型输出逐 chunk 打印，`\n` 换行，不使用清屏（保持可读）。
 - **工具调用**：`🔧 bash("npm test")` 形式，执行中显示 spinner（可选）。
 - **工具结果**：成功绿色缩进块；失败红色缩进块；截断显示 `…（已截断）`。
@@ -1048,16 +1064,24 @@ spark-code/
 
 ## 10. 实现路线图（对应考核时间线）
 
-| 阶段 | 内容 | 验收标准 | 预估 |
-|---|---|---|---|
-| **M1 骨架** | 事件日志 + Context + 事件总线 + LLM 适配器（流式）+ BlockAssembler | `spark "你好"` 能流式回复 | Day 1-2 |
-| **M2 循环** | Agent 循环（turn/step）+ Inbox + 工具注册表 + `bash` 工具 | `spark "运行 ls"` 能执行命令 | Day 3-4 |
-| **M3 文件能力** | `read`/`write`/`edit`/`glob`/`grep` + 写守卫 + 结果截断 | `spark "读取并修改 main.ts"` 成功 | Day 5-6 |
-| **M4 上下文** | 历史投影 + token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | Day 7-8 |
-| **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | Day 9 |
-| **M6 TUI 完善** | 工具卡片渲染、错误着色、Ctrl+C 取消、后台任务 job 工具 | 交互体验达标 | Day 10 |
-| **M7 Web** | Express + SSE + **Vue3** 前端（消息流/工具卡片/会话列表） | 浏览器完整可用 | Day 11-13 |
-| **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | Day 14 |
+| 阶段 | 内容 | 验收标准 | 状态 | 预估 |
+|---|---|---|---|---|
+| **M1 骨架** | 事件日志 + Context + 事件总线 + LLM 适配器（流式）+ BlockAssembler + Agent 循环 + CLI REPL | `spark "你好"` 能流式回复 | ✅ 已完成 | Day 1-2 |
+| **M2 工具** | ToolRegistry + 工具执行管道 + `bash` 工具 + Agent 循环 multi-step 重构 + prompt waterfall | `spark "运行 ls"` 能执行命令并返回结果 | 🔧 进行中 | Day 3-4 |
+| **M3 文件能力** | `read`/`write`/`edit`/`glob`/`grep` + 写守卫 + 结果截断 | `spark "读取并修改 main.ts"` 成功 | ⬜ | Day 5-6 |
+| **M4 上下文** | token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | ⬜ | Day 7-8 |
+| **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | ⬜ | Day 9 |
+| **M6 TUI 完善** | 工具卡片渲染、错误着色、后台任务 job 工具 | 交互体验达标 | ⬜ | Day 10 |
+| **M7 Web** | Express + SSE + **Vue3** 前端（消息流/工具卡片/会话列表） | 浏览器完整可用 | ⬜ | Day 11-13 |
+| **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | ⬜ | Day 14 |
+
+### M1→M2 调整说明
+
+M1 验收发现 4 项偏差，均在 M2 修复：
+1. Agent 循环无 multi-step → M2 重构 `runTurn()` 为 while 循环
+2. usage 未提取 → M2 启用 `stream_options: { include_usage: true }`
+3. prompt 组装未走 waterfall → M2 改为 waterfall 模式，工具 schema 通过中间件注入
+4. `isProjected()` 永远返回 false → 保持现状（cursor 已足够），M4 清理
 
 ---
 
