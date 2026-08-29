@@ -12,6 +12,8 @@ import { LlmAdapter } from './core/llm.js'
 import { SparkAgent } from './core/loop.js'
 import { ToolRegistry } from './tools/registry.js'
 import { bashTool } from './tools/bash.js'
+import { readTool, writeTool, editTool } from './tools/fs.js'
+import { globTool, grepTool } from './tools/search.js'
 import type { ToolResult } from './tools/types.js'
 import type { SparkConfig } from './config.js'
 
@@ -54,6 +56,11 @@ function createContext(config: SparkConfig): Context {
   // 注册工具
   const tools = new ToolRegistry()
   tools.register(bashTool)
+  tools.register(readTool)
+  tools.register(writeTool)
+  tools.register(editTool)
+  tools.register(globTool)
+  tools.register(grepTool)
   ctx.provide('tools', tools)
 
   return ctx
