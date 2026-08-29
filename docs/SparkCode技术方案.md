@@ -1067,7 +1067,7 @@ spark-code/
 | 阶段 | 内容 | 验收标准 | 状态 | 预估 |
 |---|---|---|---|---|
 | **M1 骨架** | 事件日志 + Context + 事件总线 + LLM 适配器（流式）+ BlockAssembler + Agent 循环 + CLI REPL | `spark "你好"` 能流式回复 | ✅ 已完成 | Day 1-2 |
-| **M2 工具** | ToolRegistry + 工具执行管道 + `bash` 工具 + Agent 循环 multi-step 重构 + prompt waterfall | `spark "运行 ls"` 能执行命令并返回结果 | 🔧 进行中 | Day 3-4 |
+| **M2 工具** | ToolRegistry + 工具执行管道 + `bash` 工具 + Agent 循环 multi-step 重构 + prompt waterfall | `spark "运行 ls"` 能执行命令并返回结果 | ✅ 已完成 | Day 3-4 |
 | **M3 文件能力** | `read`/`write`/`edit`/`glob`/`grep` + 写守卫 + 结果截断 | `spark "读取并修改 main.ts"` 成功 | ⬜ | Day 5-6 |
 | **M4 上下文** | token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | ⬜ | Day 7-8 |
 | **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | ⬜ | Day 9 |

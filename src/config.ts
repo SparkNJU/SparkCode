@@ -42,6 +42,8 @@ export function loadConfig(argv: string[]): SparkConfig {
         break
       case '-w':
       case '--workspace':
+      case '--dir':
+      case '--workdir':
         workspaceOverride = args[++i]
         break
       case '-p':
@@ -105,7 +107,7 @@ Spark Code — 编程智能体
 
 选项:
   -m, --model <model>        指定模型
-  -w, --workspace <dir>      工作目录（默认当前目录）
+  -w, --dir <dir>            工作目录（默认当前目录）
   -p, --print                打印最终结果后退出（one-shot 模式）
   --no-color                 禁用颜色
   -h, --help                 帮助
