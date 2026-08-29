@@ -10,6 +10,9 @@ import { loadConfig } from './config.js'
 import { Context } from './core/context.js'
 import { LlmAdapter } from './core/llm.js'
 import { SparkAgent } from './core/loop.js'
+import { ToolRegistry } from './tools/registry.js'
+import { bashTool } from './tools/bash.js'
+import type { ToolResult } from './tools/types.js'
 import type { SparkConfig } from './config.js'
 
 async function main(): Promise<void> {
@@ -48,6 +51,11 @@ function createContext(config: SparkConfig): Context {
   ctx.provide('llm', llm)
   ctx.provide('config', config)
 
+  // 注册工具
+  const tools = new ToolRegistry()
+  tools.register(bashTool)
+  ctx.provide('tools', tools)
+
   return ctx
 }
 
@@ -73,6 +81,35 @@ async function runOneShot(agent: SparkAgent, config: SparkConfig): Promise<void>
 
   if (config.printMode) {
     stdout.write(finalText + '\n')
+  }
+}
+
+/** 直接执行 Shell 命令（不经过 LLM） */
+async function executeDirectCommand(
+  tools: ToolRegistry,
+  command: string,
+  config: SparkConfig,
+): Promise<void> {
+  const color = config.noColor ? '' : '\x1b[36m'
+  const reset = config.noColor ? '' : '\x1b[0m'
+  stdout.write(`${color}$ ${command}${reset}\n`)
+
+  const result: ToolResult = await tools.execute(
+    { id: 'direct', name: 'bash', args: { command } },
+    {
+      signal: AbortSignal.timeout(60_000),
+      agent: null as any,
+      cwd: config.workspace,
+      deferContext: () => {},
+      writeEvent: () => {},
+    },
+  )
+
+  if (result.isError) {
+    const errColor = config.noColor ? '' : '\x1b[31m'
+    stdout.write(`${errColor}${result.content}${reset}\n`)
+  } else {
+    stdout.write(`${result.content}\n`)
   }
 }
 
@@ -108,7 +145,7 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   stdout.write(`\n  Spark Code — 编程智能体\n`)
   stdout.write(`  模型: ${config.model}\n`)
   stdout.write(`  工作目录: ${config.workspace}\n`)
-  stdout.write(`  输入任务开始对话，Ctrl+C 取消/退出\n\n`)
+  stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n\n`)
 
   // REPL 循环
   while (true) {
@@ -120,6 +157,16 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
       if (!trimmed) continue
       if (trimmed === '/exit' || trimmed === '/quit') break
 
+      // 命令模式：! 前缀 → 直接执行 Shell，不经过 LLM
+      if (trimmed.startsWith('!')) {
+        const command = trimmed.slice(1).trim()
+        if (command) {
+          await executeDirectCommand(agent.tools, command, config)
+        }
+        continue
+      }
+
+      // 对话模式：走 LLM
       agent.followup(trimmed)
       await agent.waitForTurnEnd()
       stdout.write('\n')

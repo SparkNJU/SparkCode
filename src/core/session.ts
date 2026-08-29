@@ -43,7 +43,7 @@ export interface TokenUsage {
 export type StreamChunk =
   | { kind: 'content'; text: string }
   | { kind: 'tool-call-part'; index: number; id?: string; name?: string; argsFragment: string }
-  | { kind: 'finish'; reason: string | null }
+  | { kind: 'finish'; reason: string | null; usage?: TokenUsage }
 
 // ─── 回合结束原因 ───
 

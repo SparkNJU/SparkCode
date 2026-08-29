@@ -61,12 +61,26 @@ export async function* streamModel(
       model: request.model,
       messages: request.messages as ChatCompletionMessageParam[],
       stream: true,
+      stream_options: { include_usage: true },
       ...(hasTools ? { tools: request.tools as OpenAI.ChatCompletionTool[], tool_choice: 'auto' as const } : {}),
     },
     { signal },
   )
 
   for await (const part of stream) {
+    // 提取 usage（在最后一个 chunk 中，无 choices）
+    if (part.usage) {
+      yield {
+        kind: 'finish',
+        reason: 'usage',
+        usage: {
+          promptTokens: part.usage.prompt_tokens,
+          completionTokens: part.usage.completion_tokens,
+          totalTokens: part.usage.total_tokens,
+        },
+      }
+    }
+
     const delta = part.choices[0]?.delta
     if (!delta) continue
 
@@ -259,6 +273,10 @@ export class LlmAdapter {
 
       for await (const chunk of streamModel(this.client, request, signal)) {
         assembler.feed(chunk)
+        // 提取 usage
+        if (chunk.kind === 'finish' && chunk.usage) {
+          usage = chunk.usage
+        }
         // 实时广播流式 chunk（供 UI 渲染）
         this.ctx.emit('assistant/chunk', {
           turn: this.currentTurn,
@@ -267,12 +285,7 @@ export class LlmAdapter {
         })
       }
 
-      const { content, finishReason } = assembler.finish()
-
-      // 检查是否 max-tokens
-      if (finishReason === 'length') {
-        // sticky 记录，但不阻塞（后续 step 可继续）
-      }
+      const { content } = assembler.finish()
 
       const message: AssistantMessage = {
         id: generateId(),

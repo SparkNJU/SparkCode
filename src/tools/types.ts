@@ -1,4 +1,4 @@
-// tools/types.ts — 工具类型定义（M1 仅类型，不实现工具）
+// tools/types.ts — 工具类型定义
 
 import type { Agent } from '../core/loop.js'
 
@@ -35,4 +35,11 @@ export interface ToolDefinition {
   execute(args: Record<string, unknown>, ctx: ToolRunContext): Promise<ToolResult>
   /** 可选：结果后处理（截断/改写） */
   finalizeContent?(ctx: ToolRunContext, result: ToolResult): string | undefined
+}
+
+/** 工具调用输入（传给 registry.execute） */
+export interface ToolCallInput {
+  id: string                          // tool_call_id（模型生成）
+  name: string                        // 工具名
+  args: Record<string, unknown>       // 解析后的参数
 }
