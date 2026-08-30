@@ -122,6 +122,12 @@ export class Session {
     // Surface 事件增量投影
     if (options?.surfaceOp === 'append') {
       this.projectEvent(event as SessionEvent)
+    } else if (options?.surfaceOp && typeof options.surfaceOp === 'object' && options.surfaceOp.op === 'replace') {
+      // replace 操作：替换 derivedMessages 中的指定范围
+      const { start, end } = options.surfaceOp
+      this.derivedMessages.splice(start, end - start)
+      // splice 后重新投影此事件（作为替换内容）
+      this.projectEvent(event as SessionEvent)
     }
 
     return event

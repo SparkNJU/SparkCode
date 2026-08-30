@@ -17,6 +17,12 @@ export interface SparkConfig {
   }
   shell: { timeoutMs: number; maxOutputChars: number }
   web: { host: string; port: number }
+  compaction: {
+    enabled: boolean
+    threshold: number        // 触发压缩的 token 阈值
+    keepRecentTurns: number  // 保留最近 N 轮不动
+    trimThreshold: number    // 单个工具结果裁剪阈值（字符数）
+  }
   workspace: string
   oneShotTask?: string
   printMode: boolean
@@ -91,6 +97,12 @@ export function loadConfig(argv: string[]): SparkConfig {
     sandbox: { workspaceOnly: true, approvalForOutside: true },
     shell: { timeoutMs: 60_000, maxOutputChars: 200_000 },
     web: { host: 'localhost', port: 3080 },
+    compaction: {
+      enabled: true,
+      threshold: 80_000,
+      keepRecentTurns: 3,
+      trimThreshold: 10_000,
+    },
     workspace,
     oneShotTask: taskParts.length > 0 ? taskParts.join(' ') : undefined,
     printMode,

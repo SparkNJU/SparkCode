@@ -9,6 +9,8 @@ import { assemblePrompt, type PromptAssembly } from './prompt.js'
 import { LlmAdapter, toApiMessages } from './llm.js'
 import { toLlmFailure } from './error.js'
 import type { ToolRegistry } from '../tools/registry.js'
+import { trimToolResult, needsCompaction, findCompactionCutPoint, messagesToSummaryText, DEFAULT_COMPACTION_CONFIG } from '../compact/basic.js'
+import { estimateMessagesTokens, estimateTokens } from '../compact/meter.js'
 
 export interface Agent {
   readonly session: Session
@@ -152,6 +154,11 @@ export class SparkAgent implements Agent {
 
       // (B) 主循环：LLM 请求 → tool-call → 执行 → 循环
       while (true) {
+        // M4: 上下文压缩检查（在 LLM 请求之前）
+        if (this.config.compaction.enabled) {
+          await this.maybeCompactContext()
+        }
+
         // 组装 prompt（通过 waterfall，支持中间件扩展）
         const tools = this.tools.hasTools() ? this.tools.schemas() : undefined
         const baseAssembly = assemblePrompt(this.session, this.config, tools)
@@ -269,7 +276,12 @@ export class SparkAgent implements Agent {
         },
       )
 
-      // 记录 tool/result 事件
+      // M4: 裁剪超长工具结果
+      const trimmedContent = this.config.compaction.enabled
+        ? trimToolResult(result.content)
+        : result.content
+
+      // 记录 tool/result 事件（使用裁剪后的内容）
       this.session.append('tool/result', {
         turn: this.turn,
         step: this.step,
@@ -277,11 +289,74 @@ export class SparkAgent implements Agent {
           id: generateId(),
           role: 'tool',
           callId: call.id,
-          content: result.content,
+          content: trimmedContent,
           isError: result.isError,
         },
         error: result.isError ? { name: 'ToolError', code: 'TOOL_FAILED' } : undefined,
       }, { surfaceOp: 'append' })
     }
+  }
+
+  /**
+   * 检查上下文大小，必要时执行摘要压缩
+   * 公开方法：支持 /compact 命令手动触发
+   */
+  async maybeCompactContext(): Promise<void> {
+    const messages = this.session.deriveMessages()
+    const config = this.config.compaction
+
+    if (!needsCompaction(messages, { ...DEFAULT_COMPACTION_CONFIG, threshold: config.threshold })) {
+      return
+    }
+
+    // 找到压缩切割点
+    const cutIndex = findCompactionCutPoint(messages, config.keepRecentTurns)
+    if (cutIndex === 0) return // 没有可压缩的内容
+
+    // 提取要压缩的消息
+    const toCompact = messages.slice(0, cutIndex)
+    const summaryText = messagesToSummaryText(toCompact)
+
+    // 用 LLM 生成摘要（独立请求）
+    const summaryPrompt = DEFAULT_COMPACTION_CONFIG.summaryPrompt
+    const summaryResult = await this.llm.stream(
+      {
+        model: this.config.model,
+        messages: [
+          { role: 'system', content: summaryPrompt },
+          { role: 'user', content: summaryText },
+        ],
+      },
+      this.abort!.signal,
+    )
+
+    // 提取摘要文本
+    const summaryBlock = summaryResult.message.content.find(b => b.type === 'text')
+    const summary = summaryBlock?.text ?? '（摘要生成失败）'
+
+    // 用 replace 标记替换模型视角
+    // 删除 derivedMessages[0..cutIndex)，插入摘要消息
+    this.session.append('agent/inbox/spliced', {
+      target: 'next-step',
+      messages: [{
+        id: generateId(),
+        role: 'user',
+        content: `[对话摘要]\n${summary}`,
+        source: 'injected',
+      }],
+    }, {
+      surfaceOp: {
+        op: 'replace',
+        start: 0,
+        end: cutIndex,
+      },
+    })
+
+    // 广播压缩事件（供 UI 显示）
+    this.ctx.emit('compact/done', {
+      originalTokens: estimateMessagesTokens(toCompact as Array<{ role: string; content: string | Array<{ type: string; text?: string; arguments?: string; name?: string; content?: string }> }>),
+      summaryTokens: estimateTokens(summary),
+      cutIndex,
+    })
   }
 }

@@ -63,6 +63,13 @@ function createContext(config: SparkConfig): Context {
   tools.register(grepTool)
   ctx.provide('tools', tools)
 
+  // M4: 注册压缩事件监听（供 TUI 显示）
+  ctx.events.on('compact/done', (data: { originalTokens: number; summaryTokens: number; cutIndex: number }) => {
+    if (config.printMode) return // one-shot 模式不打印压缩信息
+    const saved = data.originalTokens - data.summaryTokens
+    console.log(`\n📦 上下文已压缩：${data.originalTokens} → ${data.summaryTokens} token（节省 ${saved} token）`)
+  })
+
   return ctx
 }
 
@@ -152,7 +159,8 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   stdout.write(`\n  Spark Code — 编程智能体\n`)
   stdout.write(`  模型: ${config.model}\n`)
   stdout.write(`  工作目录: ${config.workspace}\n`)
-  stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n\n`)
+  stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n`)
+  stdout.write(`  /compact 手动压缩上下文，/help 查看帮助\n\n`)
 
   // REPL 循环
   while (true) {
@@ -163,6 +171,31 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
       const trimmed = input.trim()
       if (!trimmed) continue
       if (trimmed === '/exit' || trimmed === '/quit') break
+
+      // M4: 手动触发上下文压缩（与 Claude Code /compact 对齐）
+      if (trimmed === '/compact') {
+        const messages = agent.session.deriveMessages()
+        const log = agent.session.getLog()
+        stdout.write(`\n📊 上下文状态：\n`)
+        stdout.write(`  消息数：${messages.length}\n`)
+        stdout.write(`  事件数：${log.length}\n`)
+        stdout.write(`  触发自动压缩阈值：${config.compaction.threshold} token\n`)
+        stdout.write(`\n🔄 手动触发压缩...\n`)
+        // 调用 agent 的公开方法触发压缩
+        await (agent as any).maybeCompactContext()
+        const afterMessages = agent.session.deriveMessages()
+        stdout.write(`  压缩后消息数：${afterMessages.length}\n\n`)
+        continue
+      }
+
+      // 帮助命令
+      if (trimmed === '/help' || trimmed === '/?') {
+        stdout.write(`\n  可用命令：\n`)
+        stdout.write(`  /compact    手动触发上下文压缩\n`)
+        stdout.write(`  /exit       退出\n`)
+        stdout.write(`  !命令       直接执行 Shell（如 !ls）\n\n`)
+        continue
+      }
 
       // 命令模式：! 前缀 → 直接执行 Shell，不经过 LLM
       if (trimmed.startsWith('!')) {
