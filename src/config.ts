@@ -121,6 +121,7 @@ Spark Code — 编程智能体
   -m, --model <model>        指定模型
   -w, --dir <dir>            工作目录（默认当前目录）
   -p, --print                打印最终结果后退出（one-shot 模式）
+  --resume [id|latest]       恢复会话（无参数打开选择器）
   --no-color                 禁用颜色
   -h, --help                 帮助
 
@@ -131,7 +132,9 @@ Spark Code — 编程智能体
   SPARK_WORKSPACE            默认工作目录
 
 示例:
-  spark                      交互式 REPL
+  spark                      交互式 REPL（新建会话）
+  spark --resume             打开会话选择器
+  spark --resume latest      恢复最近会话
   spark -p "修复测试"         one-shot 模式
   spark -m gpt-4o "优化性能"  指定模型
 `.trim())

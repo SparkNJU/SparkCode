@@ -2,7 +2,7 @@
 
 import type { SparkConfig } from '../config.js'
 import type { Context } from './context.js'
-import { Session, generateId, type UserMessage, type ContentBlock } from './session.js'
+import { Session, generateId, type UserMessage, type ContentBlock, type SessionEvent } from './session.js'
 import type { GenerateOptions } from './llm.js'
 import { Inbox } from './inbox.js'
 import { assemblePrompt, type PromptAssembly } from './prompt.js'
@@ -11,6 +11,9 @@ import { toLlmFailure } from './error.js'
 import type { ToolRegistry } from '../tools/registry.js'
 import { trimToolResult, needsCompaction, findCompactionCutPoint, messagesToSummaryText, DEFAULT_COMPACTION_CONFIG } from '../compact/basic.js'
 import { estimateMessagesTokens, estimateTokens } from '../compact/meter.js'
+import { JsonlWriter } from '../persist/writer.js'
+import { SessionStore } from '../persist/store.js'
+import { readJsonl } from '../persist/reader.js'
 
 export interface Agent {
   readonly session: Session
@@ -26,7 +29,7 @@ export interface Agent {
 }
 
 export class SparkAgent implements Agent {
-  readonly session: Session
+  session: Session
   readonly inbox: Inbox
   readonly ctx: Context
   readonly cwd: string
@@ -43,6 +46,11 @@ export class SparkAgent implements Agent {
   private turnEndResolve: (() => void) | null = null
   private turnEndPromise: Promise<void> | null = null
 
+  // M5: 持久化
+  private writer: JsonlWriter | null = null
+  private store: SessionStore
+  private _persistenceEnabled = false
+
   constructor(ctx: Context, config: SparkConfig) {
     this.ctx = ctx
     this.config = config
@@ -51,6 +59,7 @@ export class SparkAgent implements Agent {
     this.inbox = new Inbox()
     this.llm = ctx.get<LlmAdapter>('llm')
     this.tools = ctx.get<ToolRegistry>('tools')
+    this.store = new SessionStore()
   }
 
   /** 用户输入 → 新 turn */
@@ -104,7 +113,104 @@ export class SparkAgent implements Agent {
     return this.turnEndPromise
   }
 
+  // ─── M5: 持久化方法 ───
+
+  /** 启用持久化 */
+  enablePersistence(): void {
+    this.writer = new JsonlWriter(this.store.baseDir, this.session.id)
+    this._persistenceEnabled = true
+  }
+
+  /** 停用持久化（删除当前活跃会话磁盘文件后调用） */
+  disablePersistence(): void {
+    this.writer?.close()
+    this.writer = null
+    this._persistenceEnabled = false
+  }
+
+  /** 恢复会话 */
+  async resume(sessionId: string): Promise<void> {
+    const filePath = this.store.jsonlPath(sessionId)
+    const events = readJsonl(filePath)
+    if (events.length === 0) {
+      throw new Error(`会话 ${sessionId} 不存在或为空`)
+    }
+    this.writer?.close()
+    this.session.replay(events)
+    this.writer = new JsonlWriter(this.store.baseDir, sessionId)
+    this._persistenceEnabled = true
+    this.saveCurrentMeta()
+  }
+
+  /** 新建会话 */
+  newSession(): void {
+    this.saveCurrentMeta()
+    this.writer?.close()
+    this.session = new Session()
+    this.writer = new JsonlWriter(this.store.baseDir, this.session.id)
+    this._persistenceEnabled = true
+  }
+
+  /** 保存当前会话元数据 */
+  saveCurrentMeta(): void {
+    const log = this.session.getLog()
+    const userMessages = log.filter(e => e.type === 'user/message')
+    const firstUserMsg = userMessages[0]
+    const title = firstUserMsg?.data?.content
+      ? (firstUserMsg.data.content as string).slice(0, 40)
+      : ''
+
+    this.store.saveMeta({
+      id: this.session.id,
+      createdAt: log.length > 0 ? log[0]!.time : Date.now(),
+      lastActiveAt: Date.now(),
+      messageCount: userMessages.length,
+      title,
+    })
+  }
+
+  /** 重命名当前会话 */
+  renameSession(title: string): void {
+    this.store.saveMeta({
+      id: this.session.id,
+      createdAt: this.session.getLog()[0]?.time ?? Date.now(),
+      lastActiveAt: Date.now(),
+      messageCount: this.session.getLog().filter(e => e.type === 'user/message').length,
+      title,
+    })
+  }
+
+  /** 删除会话磁盘文件 */
+  deleteSession(sessionId: string): void {
+    this.store.delete(sessionId)
+    // 如果删除的是当前活跃会话，停用持久化
+    if (sessionId === this.session.id) {
+      this.disablePersistence()
+    }
+  }
+
+  /** 检查持久化是否启用 */
+  get persistenceEnabled(): boolean {
+    return this._persistenceEnabled
+  }
+
+  /** 获取会话存储 */
+  getStore(): SessionStore {
+    return this.store
+  }
+
   // ─── 内部方法 ───
+
+  /** 追加事件并同步写入 JSONL */
+  private appendEvent<T extends SessionEvent['type']>(
+    type: T,
+    data: any,
+    options?: { surfaceOp?: 'append' | { op: 'replace'; start: number; end: number } },
+  ): any {
+    const event = this.session.append(type, data, options)
+    this.writer?.write(event as SessionEvent)
+    return event
+  }
 
   private wakeDriver(): void {
     if (this.phase !== 'idle') return
@@ -136,20 +242,20 @@ export class SparkAgent implements Agent {
     this.step = 0
     this.abort = new AbortController()
 
-    this.session.append('turn/start', { turn: this.turn })
+    this.appendEvent('turn/start', { turn: this.turn })
 
     try {
       // (A) 认领 next-turn 输入
       const messages = this.inbox.claim('next-turn', this.turn)
       if (messages.length === 0) {
-        this.session.append('turn/end', { turn: this.turn, reason: { kind: 'completed' } })
+        this.appendEvent('turn/end', { turn: this.turn, reason: { kind: 'completed' } })
         return false
       }
 
       // 记录用户消息
-      this.session.append('step/start', { turn: this.turn, step: this.step })
+      this.appendEvent('step/start', { turn: this.turn, step: this.step })
       for (const m of messages) {
-        this.session.append('user/message', m, { surfaceOp: 'append' })
+        this.appendEvent('user/message', m, { surfaceOp: 'append' })
       }
 
       // (B) 主循环：LLM 请求 → tool-call → 执行 → 循环
@@ -180,7 +286,7 @@ export class SparkAgent implements Agent {
         }
 
         // 记录请求头
-        this.session.append('request/header', {
+        this.appendEvent('request/header', {
           header: { model: assembly.header.model, systemPrompt: assembly.header.systemPrompt },
           reason: 'change',
         })
@@ -190,7 +296,7 @@ export class SparkAgent implements Agent {
         const result = await this.llm.stream(request, this.abort.signal)
 
         // 记录 assistant 消息
-        this.session.append('assistant/message', {
+        this.appendEvent('assistant/message', {
           turn: this.turn,
           step: this.step,
           message: result.message,
@@ -203,14 +309,14 @@ export class SparkAgent implements Agent {
 
         // 无 tool-call → 回合完成
         if (toolCalls.length === 0) {
-          this.session.append('step/end', { turn: this.turn, step: this.step })
+          this.appendEvent('step/end', { turn: this.turn, step: this.step })
           break
         }
 
         // 执行工具调用
         await this.executeToolCalls(toolCalls)
 
-        this.session.append('step/end', { turn: this.turn, step: this.step })
+        this.appendEvent('step/end', { turn: this.turn, step: this.step })
 
         // 检查 step 上限
         if (this.step >= this.config.maxStepsPerTurn) {
@@ -220,18 +326,18 @@ export class SparkAgent implements Agent {
         // 准备下一步
         this.step++
         const nextMessages = this.inbox.claim('next-step', this.turn)
-        this.session.append('step/start', { turn: this.turn, step: this.step })
+        this.appendEvent('step/start', { turn: this.turn, step: this.step })
         for (const m of nextMessages) {
-          this.session.append('user/message', m, { surfaceOp: 'append' })
+          this.appendEvent('user/message', m, { surfaceOp: 'append' })
         }
       }
 
       // 回合结束
-      this.session.append('turn/end', { turn: this.turn, reason: { kind: 'completed' } })
+      this.appendEvent('turn/end', { turn: this.turn, reason: { kind: 'completed' } })
       return this.inbox.hasPending()
     } catch (error) {
       const failure = toLlmFailure(error)
-      this.session.append('turn/end', {
+      this.appendEvent('turn/end', {
         turn: this.turn,
         reason: { kind: 'error', error: failure },
       })
@@ -245,7 +351,7 @@ export class SparkAgent implements Agent {
   ): Promise<void> {
     // 记录所有 tool/call 事件
     for (const call of calls) {
-      this.session.append('tool/call', {
+      this.appendEvent('tool/call', {
         turn: this.turn,
         step: this.step,
         callId: call.id,
@@ -271,7 +377,7 @@ export class SparkAgent implements Agent {
           cwd: this.cwd,
           deferContext: (msg) => this.inject(msg),
           writeEvent: (type, data) => {
-            this.session.append(type as any, data as any)
+            this.appendEvent(type as any, data as any)
           },
         },
       )
@@ -282,7 +388,7 @@ export class SparkAgent implements Agent {
         : result.content
 
       // 记录 tool/result 事件（使用裁剪后的内容）
-      this.session.append('tool/result', {
+      this.appendEvent('tool/result', {
         turn: this.turn,
         step: this.step,
         message: {
@@ -336,7 +442,7 @@ export class SparkAgent implements Agent {
 
     // 用 replace 标记替换模型视角
     // 删除 derivedMessages[0..cutIndex)，插入摘要消息
-    this.session.append('agent/inbox/spliced', {
+    this.appendEvent('agent/inbox/spliced', {
       target: 'next-step',
       messages: [{
         id: generateId(),

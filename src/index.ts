@@ -2,7 +2,13 @@
 
 // index.ts — CLI 入口 + REPL
 
-import 'dotenv/config'  // 加载 .env 文件（必须在最前面）
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { config as dotenvConfig } from 'dotenv'
+
+// 从项目源码目录加载 .env（npm link 后工作目录会变化）
+const __dirname = dirname(fileURLToPath(import.meta.url))
+dotenvConfig({ path: resolve(__dirname, '../.env') })
 
 import * as readline from 'node:readline/promises'
 import { stdin, stdout, stderr } from 'node:process'
@@ -16,6 +22,7 @@ import { readTool, writeTool, editTool } from './tools/fs.js'
 import { globTool, grepTool } from './tools/search.js'
 import type { ToolResult } from './tools/types.js'
 import type { SparkConfig } from './config.js'
+import { showSessionPicker } from './persist/picker.js'
 
 async function main(): Promise<void> {
   // 1. 解析配置
@@ -27,11 +34,118 @@ async function main(): Promise<void> {
   // 3. 创建 Agent
   const agent = new SparkAgent(ctx, config)
 
-  // 4. CLI 模式分支
+  // 4. M5: 解析 --resume 参数
+  const args = process.argv.slice(2)
+  const resumeIdx = args.indexOf('--resume')
+  let startMode: 'new' | 'picker' | 'latest' | 'specific' = 'new'
+  let specificId: string | null = null
+
+  if (resumeIdx !== -1) {
+    const resumeArg = args[resumeIdx + 1]
+    if (!resumeArg || resumeArg.startsWith('-')) {
+      startMode = 'picker'           // spark --resume → 打开 Picker
+    } else if (resumeArg === 'latest') {
+      startMode = 'latest'           // spark --resume latest
+    } else {
+      startMode = 'specific'         // spark --resume <id>
+      specificId = resumeArg
+    }
+  }
+
+  // 5. CLI 模式分支
   if (config.oneShotTask) {
+    // one-shot 模式：启用持久化后执行任务
+    agent.enablePersistence()
     await runOneShot(agent, config)
+    agent.saveCurrentMeta()
+  } else if (startMode !== 'new') {
+    // M5: 恢复会话模式
+    await runResumeMode(agent, config, startMode, specificId)
   } else {
+    // 正常 REPL 模式：新建会话
+    agent.enablePersistence()
     await runRepl(agent, config)
+    agent.saveCurrentMeta()
+  }
+}
+
+/** M5: 恢复会话模式 */
+async function runResumeMode(
+  agent: SparkAgent,
+  config: SparkConfig,
+  mode: 'picker' | 'latest' | 'specific',
+  specificId: string | null,
+): Promise<void> {
+  const store = agent.getStore()
+
+  switch (mode) {
+    case 'latest': {
+      const latestId = store.getLatestId()
+      if (latestId) {
+        await agent.resume(latestId)
+        console.log(`📂 已恢复最近会话: ${latestId}`)
+        await runRepl(agent, config)
+        agent.saveCurrentMeta()
+      } else {
+        console.log('📭 没有历史会话，创建新会话')
+        agent.enablePersistence()
+        await runRepl(agent, config)
+        agent.saveCurrentMeta()
+      }
+      break
+    }
+
+    case 'specific': {
+      try {
+        await agent.resume(specificId!)
+        console.log(`📂 已恢复会话: ${specificId}`)
+        await runRepl(agent, config)
+        agent.saveCurrentMeta()
+      } catch {
+        console.log(`⚠️  会话 ${specificId} 不存在，打开选择器...`)
+        // 启动时还没有 runRepl 的 rl，创建临时 readline
+        const tempRl = readline.createInterface({ input: stdin, output: stdout, terminal: true })
+        const result = await showSessionPicker(store.list(), tempRl, stdout)
+        tempRl.close()
+        // 处理删除
+        for (const deletedId of result.deletedIds) {
+          agent.deleteSession(deletedId)
+        }
+        if (result.action === 'select' && result.sessionId) {
+          await agent.resume(result.sessionId)
+          await runRepl(agent, config)
+          agent.saveCurrentMeta()
+        } else {
+          agent.enablePersistence()
+          await runRepl(agent, config)
+          agent.saveCurrentMeta()
+        }
+      }
+      break
+    }
+
+    case 'picker': {
+      // 启动时还没有 runRepl 的 rl，创建临时 readline
+      const tempRl = readline.createInterface({ input: stdin, output: stdout, terminal: true })
+      const result = await showSessionPicker(store.list(), tempRl, stdout)
+      tempRl.close()
+      // 处理删除
+      for (const deletedId of result.deletedIds) {
+        agent.deleteSession(deletedId)
+      }
+      if (result.action === 'select' && result.sessionId) {
+        await agent.resume(result.sessionId)
+        console.log(`📂 已恢复会话: ${result.sessionId}`)
+        await runRepl(agent, config)
+        agent.saveCurrentMeta()
+      } else {
+        // 取消 → 新建会话
+        agent.enablePersistence()
+        await runRepl(agent, config)
+        agent.saveCurrentMeta()
+      }
+      break
+    }
   }
 }
 
@@ -129,7 +243,7 @@ async function executeDirectCommand(
 
 /** 交互式 REPL */
 async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
-  const rl = readline.createInterface({
+  let rl = readline.createInterface({
     input: stdin,
     output: stdout,
     terminal: true,
@@ -159,8 +273,9 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   stdout.write(`\n  Spark Code — 编程智能体\n`)
   stdout.write(`  模型: ${config.model}\n`)
   stdout.write(`  工作目录: ${config.workspace}\n`)
+  stdout.write(`  会话ID: ${agent.session.id}\n`)
   stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n`)
-  stdout.write(`  /compact 手动压缩上下文，/help 查看帮助\n\n`)
+  stdout.write(`  /sessions 切换会话 | /compact 压缩上下文 | /help 查看帮助\n\n`)
 
   // REPL 循环
   while (true) {
@@ -191,9 +306,70 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
       // 帮助命令
       if (trimmed === '/help' || trimmed === '/?') {
         stdout.write(`\n  可用命令：\n`)
-        stdout.write(`  /compact    手动触发上下文压缩\n`)
-        stdout.write(`  /exit       退出\n`)
-        stdout.write(`  !命令       直接执行 Shell（如 !ls）\n\n`)
+        stdout.write(`  /sessions       切换会话（输入序号选择）\n`)
+        stdout.write(`  /resume         从磁盘重新加载当前会话\n`)
+        stdout.write(`  /new            创建新会话\n`)
+        stdout.write(`  /rename <标题>   重命名当前会话\n`)
+        stdout.write(`  /compact        手动触发上下文压缩\n`)
+        stdout.write(`  /exit           退出\n`)
+        stdout.write(`  !命令           直接执行 Shell（如 !ls）\n\n`)
+        continue
+      }
+
+      // M5: /resume — 从磁盘重新加载当前会话
+      if (trimmed === '/resume') {
+        const sessionId = agent.session.id
+        try {
+          await agent.resume(sessionId)
+          const messages = agent.session.deriveMessages()
+          stdout.write(`\n📂 已从磁盘重新加载会话: ${sessionId}\n`)
+          stdout.write(`  消息数: ${messages.length}\n\n`)
+        } catch {
+          stdout.write(`\n⚠️  无法加载会话 ${sessionId}\n\n`)
+        }
+        continue
+      }
+
+      // M5: /sessions — 会话选择器（文本输入模式）
+      if (trimmed === '/sessions') {
+        const store = agent.getStore()
+        const sessions = store.list()
+
+        const result = await showSessionPicker(sessions, rl, stdout)
+
+        // 处理删除的会话
+        for (const deletedId of result.deletedIds) {
+          agent.deleteSession(deletedId)
+        }
+        if (result.deletedIds.length > 0) {
+          stdout.write(`\n🗑️  已删除 ${result.deletedIds.length} 个会话\n`)
+        }
+
+        if (result.action === 'select' && result.sessionId) {
+          await agent.resume(result.sessionId)
+          stdout.write(`\n📂 已恢复会话: ${result.sessionId}\n\n`)
+        } else {
+          stdout.write('\n已取消\n\n')
+        }
+        continue
+      }
+
+      // M5: /new — 创建新会话
+      if (trimmed === '/new') {
+        agent.newSession()
+        stdout.write(`\n✨ 已创建新会话: ${agent.session.id}\n\n`)
+        continue
+      }
+
+      // M5: /rename <标题> — 重命名当前会话
+      if (trimmed.startsWith('/rename')) {
+        const title = trimmed.slice(7).trim()
+        if (!title) {
+          stdout.write('\n用法: /rename <会话标题>\n\n')
+        } else {
+          agent.renameSession(title)
+          stdout.write(`\n✏️  会话已重命名为: "${title}"\n\n`)
+        }
         continue
       }
 
@@ -216,6 +392,8 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
     }
   }
 
+  // 退出时保存元数据
+  agent.saveCurrentMeta()
   process.removeListener('SIGINT', onSigint)
   rl.close()
 }
