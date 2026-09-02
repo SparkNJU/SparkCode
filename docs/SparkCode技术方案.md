@@ -43,13 +43,10 @@ Spark Code 是一个**从 0 实现、不依赖任何 agent 框架/SDK** 的编�
 
 ```mermaid
 flowchart TB
-  subgraph CLI["Bash 界面 (apps/cli)"]
-    CLI1["参数解析 + REPL"]
-    CLI2["流式输出渲染"]
-  end
-  subgraph WEB["Web 界面 (apps/web)"]
-    WEB1["Express + SSE 后端"]
-    WEB2["Vue3 前端"]
+  subgraph CLI["TUI 界面 (src/ui)"]
+    CLI1["参数解析 + TUI 主循环"]
+    CLI2["全屏渲染（消息区+输入框+状态栏）"]
+    CLI3["Markdown + 工具卡片 + ASCII 横幅"]
   end
   subgraph CORE["核心运行时 (src/core)"]
     SESSION["Session 事件日志<br/>(唯一事实源)"]
@@ -810,7 +807,7 @@ export function estimateTokens(text: string): number {
 
 ---
 
-## 7. Bash 界面（完整 Spec）
+## 7. TUI 界面（完整 Spec）
 
 ### 7.1 命令行接口
 
@@ -876,119 +873,165 @@ sequenceDiagram
 - **退出**：`Ctrl+C` 一次取消当前回合，两次退出进程。
 - 颜色使用 ANSI 转义；`--no-color` 关闭。
 
-### 7.4 实现要点（Bash 界面）
-- 使用 Node `readline/promises` 实现输入循环（零依赖）。
+### 7.4 实现要点（TUI 界面）
+- 使用纯 ANSI Escape Codes 实现全屏 TUI（零第三方 TUI 依赖）。
 - 事件订阅：TUI 订阅 `session/event`（可重放）与 `agent/status`（实时状态）。
-- 所有 UI 渲染均为 `events` 的纯函数——保证与 Web 渲染逻辑一致（同一事件流两套渲染）。
+- 所有 UI 渲染均为 `events` 的纯函数——保证事件投影逻辑可复用。
+- 详见 `docs/TUI设计方案.md`。
 
 ---
 
-## 8. Web 界面（完整 Spec）
+## 8. TUI 界面（完整设计）
 
 ### 8.1 总体结构
 
-```mermaid
-flowchart LR
-  subgraph Browser["浏览器"]
-    VUE["Vue3 单页"]
-    SSE["EventSource (SSE)"]
-    API["fetch API"]
-  end
-  subgraph Server["Node 后端"]
-    EXPRESS["Express"]
-    SSES["/api/stream (SSE)"]
-    APIS["/api/* (REST)"]
-    AGENT["Agent 运行时（与 CLI 共用同一核心）"]
-  end
-  Browser -->|POST /api/session| EXPRESS
-  Browser -->|GET /api/stream?sessionId=xx| SSES
-  EXPRESS --> AGENT
-  AGENT -->|广播 session/event| SSES
-  SSES --> SSE
-  VUE --> API
-  APIS --> EXPRESS
+~~原 Web 前端方案已取消~~，改为全屏 TUI 实现。详见 `docs/TUI设计方案.md`。
+
+**核心设计**：TUI 与核心运行时**共用同一套事件系统**（`src/core` + `src/tools`），只替换"输入源 + 事件渲染层"。UI 是事件的纯函数——同一事件流，TUI 和理论上的 Web 渲染器遵循相同的投影逻辑。
+
+### 8.2 TUI 设计概要
+
+**屏幕布局**：
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ⚡ Spark Code │ 模型: deepseek-chat │ 上下文: 12.3k token      │ ← 状态栏
+├─────────────────────────────────────────────────────────────────┤
+│  👤 用户消息                                                    │ ← 消息区
+│  🤖 AI 回复（流式）                                              │    （可滚动）
+│  🔧 bash(npm test)                                              │
+│  │ ✅ 3 passing                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│  > _                                                           │ ← 输入框
+├─────────────────────────────────────────────────────────────────┤
+│  💬 普通模式 │ Ctrl+C 取消 │ /help 帮助                         │ ← 提示栏
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**关键设计**：Web 后端与 CLI **共用同一套核心运行时**（`src/core` + `src/tools`），只替换"输入源 + 事件渲染层"。这保证了两种界面行为一致，也符合"同一事件流两套渲染"原则。
-
-### 8.2 后端 API 协议（Spec）
-
-```
-POST /api/session              → 创建会话 { sessionId }
-GET  /api/session/:id           → 会话元数据 + 最近事件
-POST /api/session/:id/message   → 发送用户消息 { content } → { ok }
-GET  /api/session/:id/stream    → SSE 事件流（text/event-stream）
-POST /api/session/:id/cancel    → 取消当前回合
-GET  /api/sessions              → 会话列表
-DELETE /api/session/:id         → 删除会话
-GET  /api/tools                 → 当前注册工具 schema（调试用）
-GET  /api/config                → 脱敏配置（不含 key）
-```
-
-**SSE 事件格式**：
-```
-event: session/event
-data: {"seq":12,"type":"assistant/chunk","data":{"text":"..."}}
-
-event: agent/status
-data: {"status":"running"}
-
-event: turn/end
-data: {"reason":{"kind":"completed"}}
-```
-
-### 8.3 前端设计（Vue 3）
-
-**页面布局**：
-```
-┌──────────────────────────────────────────────────┐
-│ Header: Spark Code | 模型选择 | 会话列表 | 工作区  │
-├──────────┬───────────────────────────────────────┤
-│ Sidebar  │  Conversation（消息流）                 │
-│ 会话列表   │  ├ 用户消息                           │
-│ 工作区     │  ├ 助手消息（流式打字机效果）            │
-│ 工具面板   │  ├ 工具调用卡片（可折叠，显示参数/结果）  │
-│          │  ├ Todo 面板（可选）                   │
-│          │  └ 输入框（支持多行 + Enter 发送）      │
-└──────────┴───────────────────────────────────────┘
-```
-
-**组件树（Vue SFC + `<script setup>` 组合式 API）**：
-```
-<App.vue>                                  // 根组件：组合 store + 布局
-  <Header.vue model-selector @new-session @select-session />
-  <Sidebar.vue session-list workspace-info />
-  <Main>
-    <MessageList.vue>
-      <UserBubble.vue />
-      <AssistantBubble.vue :streaming="bool">
-        <MarkdownRenderer />               // 渲染 markdown 代码块
-      </AssistantBubble.vue>
-      <ToolCallCard.vue name args result>
-        // 折叠/展开，bash 显示命令块，edit 显示 diff
-      </ToolCallCard.vue>
-    </MessageList.vue>
-    <Composer.vue @send @stop />
-  </Main>
-</App.vue>
-```
+**技术方案**：纯 ANSI Escape Codes，零第三方 TUI 依赖。~470 行新代码。
 
 **渲染要点**：
-- `EventSource` 订阅 `GET /api/session/:id/stream`，`session/event` 事件实时 append 到消息流。
-- 消息流**纯由事件渲染**（与重放一致），不做服务端预渲染。事件 → 状态采用**纯函数投影**（`projectEvent(state, event)`），在 Pinia store 中作为唯一 mutation 入口，保证与重放逻辑一致。
-- Markdown 渲染用 `markdown-it`（通用库，允许）。
-- 工具卡片按 `tool.name` 分 keyed renderer（`v-if` / 动态组件 `<component :is>`）：`bash` → 终端样式黑底代码块；`edit` → diff 视图（绿/红行）。
+- 事件 → 状态采用**纯函数投影**（`reduceEvent(state, event)`），与 Web 方案的 `projectEvent` 逻辑一致。
+- 消息区维护行缓冲区，只渲染最后 N 行（N = 终端高度 - 4），自动跟随最新消息。
+- 工具调用卡片：工具名 + 参数（cyan）→ 输出内容（最多 10 行）→ 结果（绿色/红色）。
+- Markdown 简易渲染：标题粗体、`**粗体**`、`` `代码` `` 反色、代码块边框。
+- ASCII art 欢迎横幅。
+- 终端窗口 resize 自适应（SIGWINCH）。
 
-### 8.4 前端技术栈
-- **框架**：`vue@3`（组合式 API + `<script setup>` 单文件组件 SFC）
-- **构建**：`vite` + `@vitejs/plugin-vue`
-- **类型**：`vue-tsc`（模板类型检查，严格模式）
-- **状态管理**：`pinia`（一个 `useSessionStore`，封装事件流投影与发送动作）；流式状态用 `ref`/`reactive` + computed
-- **SSE**：原生 `EventSource`
-- **Markdown 渲染**：`markdown-it`（含代码高亮 `highlight.js`）
-- **路由**：单页无需 vue-router（可选引入以支持多会话深链）
+---
 
-> 选型理由（答辩可讲）：Vue 3 的响应式系统天然适合"事件流 → UI 状态"的投影式更新；`<script setup>` 让模板逻辑内聚；Pinia 单一 store 承载事件投影，与"UI 是事件流的纯函数"设计一致。
+## 8.3 多模式切换
+
+系统支持三种交互模式，通过 `/plan`、`/auto`、`/normal` 命令或 Shift+Tab 快捷键切换。
+
+| 模式 | 命令 | 快捷键 | TUI 状态栏 | 行为 |
+|------|------|--------|-----------|------|
+| **Normal**（默认） | `/normal` | Shift+Tab | `💬 普通模式` | 读工具自动批准；写/bash 工具需用户确认 |
+| **Plan** | `/plan` | Shift+Tab | `📋 规划模式` | 只允许 read/glob/grep；禁止写入和执行；system prompt 注入 "只分析，不执行" |
+| **Auto** | `/auto` | Shift+Tab | `⚡ 自动模式` | 所有工具自动批准，无需确认 |
+
+**实现要点**：
+- 模式存储在 `SparkAgent.mode` 字段（会话级，非全局配置）
+- Plan 模式：`ToolRegistry.preExecute` 拒绝非只读工具；`assemblePrompt` 注入 plan 指令
+- Auto 模式：`ToolRegistry.preExecute` 默认 `{ allow: true }`
+- Normal 模式：现有审批逻辑
+- Shift+Tab 循环切换：normal → plan → auto → normal
+
+---
+
+## 8.4 Effort 级别
+
+控制模型的推理深度，通过 `/effort` 命令切换。
+
+| 级别 | 命令 | 效果 |
+|------|------|------|
+| **low** | `/effort low` | 快速简短回答，system prompt 注入 "Give brief, direct answers" |
+| **medium**（默认） | `/effort medium` | 平衡速度与质量，无额外注入 |
+| **high** | `/effort high` | 深度分析，system prompt 注入 "Think step by step, be thorough" |
+
+**实现要点**：
+- 存储在 `SparkAgent.effort` 字段
+- 对于支持 `reasoning_effort` 参数的模型（如 OpenAI），直接传递 API 参数
+- 对于不支持的模型（如 DeepSeek），通过 system prompt 注入指导
+- `/effort` 无参数时显示交互式列表（↑↓ 选择，Enter 确认）
+- TUI 状态栏显示当前级别
+
+---
+
+## 8.5 模型切换
+
+通过 `/model` 命令运行时切换模型。
+
+| 命令 | 行为 |
+|------|------|
+| `/model` | 显示交互式模型列表（↑↓ 选择，Enter 确认） |
+| `/model <name>` | 直接切换到指定模型 |
+
+**实现要点**：
+- `currentModel` 存储在 `SparkAgent` 实例上（可变），`config.model` 为默认值
+- `assemblePrompt` 使用 `agent.currentModel`
+- 可用模型列表：从环境变量 `SPARK_MODELS` 读取（逗号分隔），或硬编码默认列表
+- 切换后注入系统消息 "模型已切换为 xxx"
+- TUI 状态栏显示当前模型名
+
+---
+
+## 8.6 自定义 Skill（斜杠命令模板）
+
+用户可创建自定义斜杠命令，作为 prompt 模板发送给 LLM。
+
+**目录结构**：
+```
+.spark/commands/           # 项目级 skill
+  fix-issue.md
+  review-pr.md
+~/.spark/commands/         # 用户级 skill
+  explain.md
+```
+
+两个目录的 skill 合并展示，**不区分项目级/用户级前缀**，统一通过 `/skill-name` 调用。
+
+**Skill 文件格式**：
+```markdown
+---
+description: 修复 GitHub issue
+---
+修复以下 issue：
+$ARGUMENTS
+
+搜索相关文件，理解上下文，应用修复，然后运行测试。
+```
+
+- 文件名（去掉 `.md`）即为命令名
+- `$ARGUMENTS` 替换为用户输入的参数
+- YAML frontmatter 可选，`description` 用于 `/skills` 列表展示
+
+**内置命令**：
+| 命令 | 行为 |
+|------|------|
+| `/skills` | 列出所有可用 skill（扫描两个目录） |
+| `/skill-name [args]` | 执行 skill，内容作为 user message 发送 |
+
+**实现要点**：
+- 启动时扫描 `.spark/commands/*.md` 和 `~/.spark/commands/*.md`，缓存 skill 列表
+- 输入 `/` 时触发 Tab 补全：匹配内置命令 + 自定义 skill 名
+- Skill 执行：读取文件 → 替换 `$ARGUMENTS` → `agent.followup(processedText)`
+
+---
+
+## 8.7 Tab 补全与命令提示
+
+输入 `/` 后支持 Tab 补全和实时提示。
+
+**行为**：
+- 输入 `/` 后按 Tab：循环补全匹配的命令/skill 名
+- 输入 `/mod` 后按 Tab：补全为 `/model`
+- 输入 `/` 后显示所有可用命令列表（灰色提示）
+
+**实现要点**：
+- TUI 模式：监听 Tab 键（`\t`），从命令列表中模糊匹配
+- 命令列表 = 内置命令（help/compact/sessions/new/rename/resume/model/effort/skills/plan/auto/normal/exit）+ 自定义 skill 名
+- 匹配算法：前缀匹配，多个匹配时循环切换
+- readline 模式：利用 `completer` 参数实现补全
 
 ---
 
@@ -1027,32 +1070,11 @@ spark-code/
 │   ├── persist/
 │   │   └── jsonl.ts           # 会话日志落盘/恢复
 │   ├── ui/
-│   │   ├── tui.ts             # Bash 界面（readline REPL）
-│   │   └── render.ts          # 事件→文本渲染（纯函数）
-│   └── server/
-│       ├── index.ts           # Express 启动
-│       ├── routes.ts          # REST + SSE
-│       └── sse.ts             # SSE 广播
-├── web/                       # 前端（vite + vue3）
-│   ├── index.html
-│   ├── vite.config.ts         # @vitejs/plugin-vue
-│   ├── tsconfig.json
-│   └── src/
-│       ├── main.ts            # createApp(App).use(createPinia()).mount(...)
-│       ├── App.vue            # 根组件：布局 + store 初始化
-│       ├── components/
-│       │   ├── Header.vue
-│       │   ├── Sidebar.vue
-│       │   ├── MessageList.vue
-│       │   ├── UserBubble.vue
-│       │   ├── AssistantBubble.vue
-│       │   ├── ToolCallCard.vue
-│       │   ├── MarkdownRenderer.vue   # markdown-it 封装
-│       │   └── Composer.vue
-│       ├── stores/
-│       │   ├── session.ts     # Pinia：useSessionStore（事件投影 + 发送动作）
-│       │   └── project.ts     # 纯函数 projectEvent(state, event)
-│       └── api.ts             # fetch + EventSource 封装
+│   │   ├── tui.ts             # TUI 主循环（替代 readline REPL）
+│   │   ├── screen.ts          # ANSI 光标控制
+│   │   ├── render.ts          # 事件→屏幕渲染（纯函数）
+│   │   ├── banner.ts          # ASCII art 欢迎横幅
+│   │   └── markdown.ts        # 简易 markdown → ANSI
 └── tests/                     # vitest 单元测试
     ├── session.spec.ts
     ├── loop.spec.ts
@@ -1071,9 +1093,9 @@ spark-code/
 | **M3 文件能力** | `read`/`write`/`edit`/`glob`/`grep` + 写守卫 + 结果截断 | `spark "读取并修改 main.ts"` 成功 | ✅ 已完成 | Day 5-6 |
 | **M4 上下文** | token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | ✅ 已完成 | Day 7-8 |
 | **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | ✅ 已完成 | Day 9 |
-| **M6 TUI 完善** | 工具卡片渲染、错误着色、后台任务 job 工具 | 交互体验达标 | ⬜ | Day 10 |
-| **M7 Web** | Express + SSE + **Vue3** 前端（消息流/工具卡片/会话列表） | 浏览器完整可用 | ⬜ | Day 11-13 |
-| **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | ⬜ | Day 14 |
+| **M6 交互增强** | 命令系统重构 + 模型切换（`/model`）+ 自定义 Skill（`/skill-name`）+ 模式切换（Normal/Plan/Auto）+ Effort 级别 + Tab 补全（详见 `docs/M6-交互增强技术方案.md`） | `/model` 切换模型、`/plan` 只读分析、`/effort high` 深度推理、自定义 skill 执行、Tab 补全命令 | ✅ 已完成 | Day 10-14 |
+| **M7 TUI** | 全屏 TUI：消息区 + 输入框 + 状态栏 + 工具卡片 + Markdown 渲染 + ASCII 横幅（详见 `docs/TUI设计方案.md`） | 交互体验对齐 Claude Code | ⬜ | Day 15-17 |
+| **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | ⬜ | Day 18-19 |
 
 ### M1→M2 调整说明
 
@@ -1127,14 +1149,13 @@ M1 验收发现 4 项偏差，均在 M2 修复：
 ```bash
 # 安装
 npm install
-# 交互式 Bash 界面
+# 交互式 TUI 界面
 npm run spark
 # one-shot 模式（打印最终结果退出）
 npm run spark -- -p "修复 tests 目录下失败的测试"
-# Web 界面（Vue3 前端）
-npm run web        # 启动后端 + 前端构建产物（先 npm run web:build）
-npm run web:dev    # 开发模式（vite dev 热更新 + 后端代理）
-npm run web:build  # 构建前端产物（vite build + vue-tsc 类型检查）
+# 恢复会话
+npm run spark -- --resume          # 打开会话选择器
+npm run spark -- --resume latest   # 恢复最近会话
 # 测试
 npm test
 ```
