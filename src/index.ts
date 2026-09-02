@@ -25,6 +25,8 @@ import type { SparkConfig } from './config.js'
 import { showSessionPicker } from './persist/picker.js'
 import { CommandRegistry, registerBuiltinCommands, registerModelCommand, registerModeCommands, registerEffortCommand, registerSkillCommands, loadModelPresets } from './commands/index.js'
 import { createCompleter, buildPrompt } from './ui/index.js'
+import { StatusBar, type StatusData } from './ui/status-bar.js'
+import { printBanner } from './ui/banner.js'
 
 async function main(): Promise<void> {
   // 1. 解析配置
@@ -305,16 +307,21 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
 
   process.on('SIGINT', onSigint)
 
-  // 事件渲染
-  setupEventRendering(agent, config)
+  // M7: 创建状态栏
+  const statusBar = new StatusBar()
 
-  // 打印欢迎信息
-  stdout.write(`\n  Spark Code — 编程智能体\n`)
-  stdout.write(`  模型: ${agent.currentModel}\n`)
-  stdout.write(`  工作目录: ${config.workspace}\n`)
-  stdout.write(`  会话ID: ${agent.session.id}\n`)
-  stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n`)
-  stdout.write(`  /help 查看帮助 | /model 切换模型 | /plan 规划模式 | Tab 补全命令\n\n`)
+  // M7: 打印欢迎横幅（对标 PaiCLI installStartupScreen）
+  printBanner({
+    model: agent.currentModel,
+    skills: registry.getAllNames().length,
+    mode: agent.mode,
+    version: '0.1.0',
+    cwd: config.workspace,
+    sessionId: agent.session.id,
+  })
+
+  // 事件渲染
+  setupEventRendering(agent, config, statusBar)
 
   // REPL 循环
   while (true) {
@@ -351,7 +358,10 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
       // 对话模式：走 LLM
       agent.followup(trimmed)
       await agent.waitForTurnEnd()
-      stdout.write('\n')
+
+      // M7: 回合结束后打印底部状态栏
+      refreshStatusBar(statusBar, agent, config)
+      statusBar.print()
     } catch {
       // readline 被关闭（Ctrl+C 或 /exit）
       break
@@ -364,8 +374,26 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   rl.close()
 }
 
+/** M7: 刷新状态栏数据（不渲染） */
+function refreshStatusBar(statusBar: StatusBar, agent: SparkAgent, config: SparkConfig, phase = 'idle'): void {
+  statusBar.update({
+    model: agent.currentModel,
+    phase,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    contextWindow: config.maxContextTokens,
+    totalTokens: 0,
+    elapsedMs: 0,
+    mode: agent.mode,
+    effort: agent.effort,
+    cwd: config.workspace,
+    skillCount: agent.tools.schemas().length,
+  })
+}
+
 /** 设置事件渲染（纯函数渲染，与 Web 共用逻辑） */
-function setupEventRendering(agent: SparkAgent, config: SparkConfig): void {
+function setupEventRendering(agent: SparkAgent, config: SparkConfig, statusBar: StatusBar): void {
   const ctx = agent.ctx
 
   // assistant/chunk → 流式打印文本
@@ -378,22 +406,22 @@ function setupEventRendering(agent: SparkAgent, config: SparkConfig): void {
     },
   )
 
-  // tool/call → 工具调用提示（M1 不触发，M2 启用）
+  // tool/call → 工具调用提示
   ctx.events.on<{ name: string; arguments: string }>(
     'tool/call',
     (data) => {
-      const color = config.noColor ? '' : '\x1b[36m' // cyan
+      const color = config.noColor ? '' : '\x1b[36m'
       const reset = config.noColor ? '' : '\x1b[0m'
       stdout.write(`\n${color}🔧 ${data.name}(${truncate(data.arguments, 100)})${reset}\n`)
     },
   )
 
-  // tool/result → 工具结果（M1 不触发）
+  // tool/result → 工具结果
   ctx.events.on<{ message: { content: string; isError: boolean } }>(
     'tool/result',
     (data) => {
       const isError = data.message.isError
-      const color = config.noColor ? '' : isError ? '\x1b[31m' : '\x1b[32m' // red/green
+      const color = config.noColor ? '' : isError ? '\x1b[31m' : '\x1b[32m'
       const reset = config.noColor ? '' : '\x1b[0m'
       const prefix = isError ? '✗' : '✓'
       const content = truncate(data.message.content, 500)
@@ -401,7 +429,7 @@ function setupEventRendering(agent: SparkAgent, config: SparkConfig): void {
     },
   )
 
-  // turn/end → 回合结束状态
+  // turn/end → 错误提示（状态栏在回合结束后由 REPL 主循环打印）
   ctx.events.on<{ turn: number; reason: { kind: string } }>(
     'turn/end',
     (data) => {
