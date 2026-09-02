@@ -23,6 +23,8 @@ import { globTool, grepTool } from './tools/search.js'
 import type { ToolResult } from './tools/types.js'
 import type { SparkConfig } from './config.js'
 import { showSessionPicker } from './persist/picker.js'
+import { CommandRegistry, registerBuiltinCommands, registerModelCommand, registerModeCommands, registerEffortCommand, registerSkillCommands, loadModelPresets } from './commands/index.js'
+import { createCompleter, buildPrompt } from './ui/index.js'
 
 async function main(): Promise<void> {
   // 1. 解析配置
@@ -187,6 +189,36 @@ function createContext(config: SparkConfig): Context {
   return ctx
 }
 
+/** 创建并注册命令系统 */
+async function createCommandSystem(agent: SparkAgent, config: SparkConfig): Promise<CommandRegistry> {
+  const registry = new CommandRegistry()
+
+  const ctx = {
+    agent,
+    config,
+    cwd: config.workspace,
+    print: (text: string) => stdout.write(text + '\n'),
+  }
+
+  // 注册内置命令
+  registerBuiltinCommands(registry)
+
+  // 注册模型切换命令
+  const presets = loadModelPresets()
+  registerModelCommand(registry, presets)
+
+  // 注册模式切换命令
+  registerModeCommands(registry)
+
+  // 注册 Effort 命令
+  registerEffortCommand(registry)
+
+  // 注册 Skill 命令
+  await registerSkillCommands(registry, config.workspace)
+
+  return registry
+}
+
 /** one-shot 模式：执行任务 → 打印结果 → 退出 */
 async function runOneShot(agent: SparkAgent, config: SparkConfig): Promise<void> {
   let finalText = ''
@@ -243,10 +275,17 @@ async function executeDirectCommand(
 
 /** 交互式 REPL */
 async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
+  // M6: 创建命令系统
+  const registry = await createCommandSystem(agent, config)
+
+  // M6: 创建 Tab 补全
+  const completer = createCompleter(registry)
+
   let rl = readline.createInterface({
     input: stdin,
     output: stdout,
     terminal: true,
+    completer,
   })
 
   let interruptCount = 0
@@ -271,107 +310,34 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
 
   // 打印欢迎信息
   stdout.write(`\n  Spark Code — 编程智能体\n`)
-  stdout.write(`  模型: ${config.model}\n`)
+  stdout.write(`  模型: ${agent.currentModel}\n`)
   stdout.write(`  工作目录: ${config.workspace}\n`)
   stdout.write(`  会话ID: ${agent.session.id}\n`)
   stdout.write(`  输入任务开始对话，!命令 直接执行 Shell，Ctrl+C 退出\n`)
-  stdout.write(`  /sessions 切换会话 | /compact 压缩上下文 | /help 查看帮助\n\n`)
+  stdout.write(`  /help 查看帮助 | /model 切换模型 | /plan 规划模式 | Tab 补全命令\n\n`)
 
   // REPL 循环
   while (true) {
     try {
-      const input = await rl.question('> ')
+      // M6: 动态提示符
+      const prompt = buildPrompt(agent)
+      rl.setPrompt(prompt)
+      const input = await rl.question(prompt)
       interruptCount = 0 // 重置中断计数
 
       const trimmed = input.trim()
       if (!trimmed) continue
       if (trimmed === '/exit' || trimmed === '/quit') break
 
-      // M4: 手动触发上下文压缩（与 Claude Code /compact 对齐）
-      if (trimmed === '/compact') {
-        const messages = agent.session.deriveMessages()
-        const log = agent.session.getLog()
-        stdout.write(`\n📊 上下文状态：\n`)
-        stdout.write(`  消息数：${messages.length}\n`)
-        stdout.write(`  事件数：${log.length}\n`)
-        stdout.write(`  触发自动压缩阈值：${config.compaction.threshold} token\n`)
-        stdout.write(`\n🔄 手动触发压缩...\n`)
-        // 调用 agent 的公开方法触发压缩
-        await (agent as any).maybeCompactContext()
-        const afterMessages = agent.session.deriveMessages()
-        stdout.write(`  压缩后消息数：${afterMessages.length}\n\n`)
-        continue
+      // M6: 命令系统处理
+      const commandCtx = {
+        agent,
+        config,
+        cwd: config.workspace,
+        print: (text: string) => stdout.write(text + '\n'),
       }
-
-      // 帮助命令
-      if (trimmed === '/help' || trimmed === '/?') {
-        stdout.write(`\n  可用命令：\n`)
-        stdout.write(`  /sessions       切换会话（输入序号选择）\n`)
-        stdout.write(`  /resume         从磁盘重新加载当前会话\n`)
-        stdout.write(`  /new            创建新会话\n`)
-        stdout.write(`  /rename <标题>   重命名当前会话\n`)
-        stdout.write(`  /compact        手动触发上下文压缩\n`)
-        stdout.write(`  /exit           退出\n`)
-        stdout.write(`  !命令           直接执行 Shell（如 !ls）\n\n`)
-        continue
-      }
-
-      // M5: /resume — 从磁盘重新加载当前会话
-      if (trimmed === '/resume') {
-        const sessionId = agent.session.id
-        try {
-          await agent.resume(sessionId)
-          const messages = agent.session.deriveMessages()
-          stdout.write(`\n📂 已从磁盘重新加载会话: ${sessionId}\n`)
-          stdout.write(`  消息数: ${messages.length}\n\n`)
-        } catch {
-          stdout.write(`\n⚠️  无法加载会话 ${sessionId}\n\n`)
-        }
-        continue
-      }
-
-      // M5: /sessions — 会话选择器（文本输入模式）
-      if (trimmed === '/sessions') {
-        const store = agent.getStore()
-        const sessions = store.list()
-
-        const result = await showSessionPicker(sessions, rl, stdout)
-
-        // 处理删除的会话
-        for (const deletedId of result.deletedIds) {
-          agent.deleteSession(deletedId)
-        }
-        if (result.deletedIds.length > 0) {
-          stdout.write(`\n🗑️  已删除 ${result.deletedIds.length} 个会话\n`)
-        }
-
-        if (result.action === 'select' && result.sessionId) {
-          await agent.resume(result.sessionId)
-          stdout.write(`\n📂 已恢复会话: ${result.sessionId}\n\n`)
-        } else {
-          stdout.write('\n已取消\n\n')
-        }
-        continue
-      }
-
-      // M5: /new — 创建新会话
-      if (trimmed === '/new') {
-        agent.newSession()
-        stdout.write(`\n✨ 已创建新会话: ${agent.session.id}\n\n`)
-        continue
-      }
-
-      // M5: /rename <标题> — 重命名当前会话
-      if (trimmed.startsWith('/rename')) {
-        const title = trimmed.slice(7).trim()
-        if (!title) {
-          stdout.write('\n用法: /rename <会话标题>\n\n')
-        } else {
-          agent.renameSession(title)
-          stdout.write(`\n✏️  会话已重命名为: "${title}"\n\n`)
-        }
-        continue
-      }
+      const handled = await registry.execute(trimmed, commandCtx)
+      if (handled) continue
 
       // 命令模式：! 前缀 → 直接执行 Shell，不经过 LLM
       if (trimmed.startsWith('!')) {

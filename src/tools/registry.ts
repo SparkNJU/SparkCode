@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolResult, ToolRunContext, ToolCallInput, ToolSch
 
 export class ToolRegistry {
   private defs = new Map<string, ToolDefinition>()
+  private toolFilter?: (name: string) => boolean
 
   /** 注册工具，返回 disposer */
   register(def: ToolDefinition): () => void {
@@ -13,6 +14,11 @@ export class ToolRegistry {
     }
     this.defs.set(name, def)
     return () => { this.defs.delete(name) }
+  }
+
+  /** 设置工具过滤器（用于模式切换） */
+  setFilter(filter: (name: string) => boolean): void {
+    this.toolFilter = filter
   }
 
   /** 获取所有工具 schema（供 prompt 注入） */
@@ -34,6 +40,14 @@ export class ToolRegistry {
     if (!def) {
       return {
         content: `Error: unknown tool "${input.name}". Available tools: ${[...this.defs.keys()].join(', ')}`,
+        isError: true,
+      }
+    }
+
+    // 工具过滤检查（M6: 模式切换）
+    if (this.toolFilter && !this.toolFilter(input.name)) {
+      return {
+        content: `Error: tool "${input.name}" is not available in current mode`,
         isError: true,
       }
     }

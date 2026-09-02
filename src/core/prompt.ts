@@ -3,6 +3,10 @@
 import type { Session, UserMessage } from './session.js'
 import type { SparkConfig } from '../config.js'
 import type { ToolSchema } from '../tools/types.js'
+import type { AgentMode } from './modes.js'
+import { MODE_CONFIGS } from './modes.js'
+import type { EffortLevel } from './effort.js'
+import { EFFORT_PROMPTS } from './effort.js'
 
 export interface PromptAssembly {
   header: {
@@ -18,12 +22,17 @@ export function assemblePrompt(
   session: Session,
   config: SparkConfig,
   tools?: ToolSchema[],
+  options?: {
+    mode?: AgentMode
+    effort?: EffortLevel
+    currentModel?: string
+  }
 ): PromptAssembly {
-  const systemPrompt = buildSystemPrompt(config, tools)
+  const systemPrompt = buildSystemPrompt(config, tools, options)
 
   return {
     header: {
-      model: config.model,
+      model: options?.currentModel ?? config.model,
       systemPrompt,
       tools,
     },
@@ -32,12 +41,35 @@ export function assemblePrompt(
 }
 
 /** 构建系统提示词 */
-function buildSystemPrompt(config: SparkConfig, tools?: ToolSchema[]): string {
+function buildSystemPrompt(
+  config: SparkConfig,
+  tools?: ToolSchema[],
+  options?: {
+    mode?: AgentMode
+    effort?: EffortLevel
+  }
+): string {
   const sections: string[] = []
 
   sections.push(
     `你是 Spark Code，一个编程智能体。你可以帮助用户完成编程任务。`,
   )
+
+  // M6: 注入模式提示词
+  if (options?.mode && options.mode !== 'normal') {
+    const modeConfig = MODE_CONFIGS[options.mode]
+    if (modeConfig.promptInjection) {
+      sections.push(modeConfig.promptInjection)
+    }
+  }
+
+  // M6: 注入 effort 提示词
+  if (options?.effort && options.effort !== 'medium') {
+    const effortPrompt = EFFORT_PROMPTS[options.effort]
+    if (effortPrompt) {
+      sections.push(effortPrompt)
+    }
+  }
 
   if (tools && tools.length > 0) {
     // 有工具时：描述可用工具，指导模型使用 function calling

@@ -14,6 +14,8 @@ import { estimateMessagesTokens, estimateTokens } from '../compact/meter.js'
 import { JsonlWriter } from '../persist/writer.js'
 import { SessionStore } from '../persist/store.js'
 import { readJsonl } from '../persist/reader.js'
+import { MODE_CONFIGS, type AgentMode } from './modes.js'
+import { EFFORT_PROMPTS, type EffortLevel } from './effort.js'
 
 export interface Agent {
   readonly session: Session
@@ -51,6 +53,12 @@ export class SparkAgent implements Agent {
   private store: SessionStore
   private _persistenceEnabled = false
 
+  // M6: 交互增强
+  private _currentModel: string
+  private _currentBaseURL?: string
+  private _mode: AgentMode = 'normal'
+  private _effort: EffortLevel = 'medium'
+
   constructor(ctx: Context, config: SparkConfig) {
     this.ctx = ctx
     this.config = config
@@ -60,6 +68,47 @@ export class SparkAgent implements Agent {
     this.llm = ctx.get<LlmAdapter>('llm')
     this.tools = ctx.get<ToolRegistry>('tools')
     this.store = new SessionStore()
+    this._currentModel = config.model
+    this._currentBaseURL = config.provider.baseURL
+  }
+
+  // ─── M6: 交互增强方法 ───
+
+  /** 获取当前模型名 */
+  get currentModel(): string { return this._currentModel }
+
+  /** 切换模型 */
+  setModel(model: string, baseURL?: string): void {
+    this._currentModel = model
+    if (baseURL) this._currentBaseURL = baseURL
+    this.llm.updateConfig({ model, baseURL })
+    this.inject(`[系统: 模型已切换为 ${model}]`)
+  }
+
+  /** 获取当前模式 */
+  get mode(): AgentMode { return this._mode }
+
+  /** 切换模式 */
+  setMode(mode: AgentMode): void {
+    this._mode = mode
+    const config = MODE_CONFIGS[mode]
+    // 设置工具过滤器
+    this.tools.setFilter(config.toolFilter)
+    if (config.promptInjection) {
+      this.inject(`[系统: 已切换到${mode}模式。${config.description}]`)
+    }
+  }
+
+  /** 获取当前推理深度 */
+  get effort(): EffortLevel { return this._effort }
+
+  /** 设置推理深度 */
+  setEffort(level: EffortLevel): void {
+    this._effort = level
+    const prompt = EFFORT_PROMPTS[level]
+    if (prompt) {
+      this.inject(`[系统: 推理深度已设置为${level}。${prompt}]`)
+    }
   }
 
   /** 用户输入 → 新 turn */
@@ -267,7 +316,11 @@ export class SparkAgent implements Agent {
 
         // 组装 prompt（通过 waterfall，支持中间件扩展）
         const tools = this.tools.hasTools() ? this.tools.schemas() : undefined
-        const baseAssembly = assemblePrompt(this.session, this.config, tools)
+        const baseAssembly = assemblePrompt(this.session, this.config, tools, {
+          mode: this._mode,
+          effort: this._effort,
+          currentModel: this._currentModel,
+        })
         const assembly = await this.ctx.waterfall<PromptAssembly>(
           'prompt/assemble',
           baseAssembly,

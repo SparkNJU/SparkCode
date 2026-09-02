@@ -84,8 +84,8 @@ export function loadConfig(argv: string[]): SparkConfig {
     process.exit(1)
   }
 
-  const model = modelOverride ?? env['SPARK_MODEL'] ?? 'deepseek-chat'
-  const baseURL = env['SPARK_BASE_URL'] ?? 'https://api.deepseek.com'
+  const model = modelOverride ?? env['SPARK_MODEL'] ?? 'mimo-v2.5'
+  const baseURL = env['SPARK_BASE_URL'] ?? 'https://token-plan-cn.xiaomimimo.com/v1'
   const workspace = resolve(workspaceOverride ?? env['SPARK_WORKSPACE'] ?? process.cwd())
 
   return {

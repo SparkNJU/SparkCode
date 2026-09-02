@@ -236,16 +236,31 @@ export function toApiMessages(history: DerivedMessage[]): ApiMessage[] {
 
 export class LlmAdapter {
   private client: OpenAI
+  private apiKey: string
+  private baseURL?: string
   private ctx: Context
   private currentTurn = 0
   private currentStep = 0
 
   constructor(config: { apiKey: string; baseURL?: string; ctx: Context }) {
+    this.apiKey = config.apiKey
+    this.baseURL = config.baseURL
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
     })
     this.ctx = config.ctx
+  }
+
+  /** 运行时更新配置（用于模型切换） */
+  updateConfig(config: { model?: string; baseURL?: string }): void {
+    if (config.baseURL) {
+      this.baseURL = config.baseURL
+      this.client = new OpenAI({
+        apiKey: this.apiKey,
+        baseURL: config.baseURL,
+      })
+    }
   }
 
   /** 设置当前 turn/step（供 chunk emit 用） */
