@@ -1041,9 +1041,10 @@ if (input === '\x0F') {  // Ctrl+O
 - [x] `tool-call-renderer.ts` — 工具调用格式化
 - [x] 集成到 `setupEventRendering`：tool/call 缓冲 → step/end 刷出 FoldableBlock
 
-### Phase 5：流式渲染器（day 3）
-- [ ] `inline-renderer.ts` — 代码块折叠状态机
-- [ ] 重构 `setupEventRendering`
+### Phase 5：流式渲染器（day 3）✅
+- [x] `inline-renderer.ts` — 代码块折叠状态机（triple-backtick 检测，FoldableBlock 折叠）
+- [x] 重构 `setupEventRendering`：assistant/chunk → inlineRenderer.write()，turn/start → reset()，step/end → flush()
+- [x] InlineRenderer 集成到事件管道，替换直接 stdout.write
 
 ### Phase 6：Markdown + 高亮（day 3）
 - [ ] `markdown.ts` — 终端 Markdown 渲染

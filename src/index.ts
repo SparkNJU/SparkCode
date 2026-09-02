@@ -30,6 +30,7 @@ import { printBanner } from './ui/banner.js'
 import { ActivityDisplay } from './ui/activity-display.js'
 import { FoldableBlock } from './ui/foldable-block.js'
 import { BlockRegistry } from './ui/block-registry.js'
+import { InlineRenderer } from './ui/inline-renderer.js'
 import { groupToolCalls, collapsedHeader, expandedLines, type ToolCallInput } from './ui/tool-call-renderer.js'
 
 async function main(): Promise<void> {
@@ -328,7 +329,7 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   })
 
   // 事件渲染
-  const blockRegistry = setupEventRendering(agent, config, statusBar, activityDisplay)
+  const inlineRenderer = setupEventRendering(agent, config, statusBar, activityDisplay)
 
   // REPL 循环
   while (true) {
@@ -405,9 +406,10 @@ function setupEventRendering(
   config: SparkConfig,
   statusBar: StatusBar,
   activityDisplay: ActivityDisplay,
-): BlockRegistry {
+): InlineRenderer {
   const ctx = agent.ctx
   const blockRegistry = new BlockRegistry()
+  const inlineRenderer = new InlineRenderer(blockRegistry)
   const pendingToolCalls: ToolCallInput[] = []
 
   /** 将缓冲的工具调用刷出为 FoldableBlock */
@@ -422,7 +424,15 @@ function setupEventRendering(
     pendingToolCalls.length = 0
   }
 
-  // assistant/chunk → 流式打印文本 + reasoning 动画
+  // turn/start → 重置 InlineRenderer
+  ctx.events.on<{ turn: number }>(
+    'turn/start',
+    () => {
+      inlineRenderer.reset()
+    },
+  )
+
+  // assistant/chunk → InlineRenderer 流式写入（含代码块折叠）+ reasoning 动画
   ctx.events.on<{ turn: number; step: number; chunk: { kind: string; text?: string } }>(
     'assistant/chunk',
     (data) => {
@@ -434,7 +444,7 @@ function setupEventRendering(
         if (activityDisplay.isActive()) {
           activityDisplay.end()
         }
-        stdout.write(data.chunk.text)
+        inlineRenderer.write(data.chunk.text)
       }
     },
   )
@@ -463,18 +473,20 @@ function setupEventRendering(
     },
   )
 
-  // step/end → 将缓冲的工具调用刷出为 FoldableBlock
+  // step/end → flush InlineRenderer + 刷出工具调用 FoldableBlock
   ctx.events.on<{ turn: number; step: number }>(
     'step/end',
     () => {
+      inlineRenderer.flush()
       flushToolCalls()
     },
   )
 
-  // turn/end → 结束动画 + 错误提示 + 安全兜底 flush
+  // turn/end → flush InlineRenderer + 结束动画 + 错误提示 + 安全兜底 flush
   ctx.events.on<{ turn: number; reason: { kind: string } }>(
     'turn/end',
     (data) => {
+      inlineRenderer.flush()
       flushToolCalls()
       if (activityDisplay.isActive()) {
         activityDisplay.end()
@@ -487,7 +499,7 @@ function setupEventRendering(
     },
   )
 
-  return blockRegistry
+  return inlineRenderer
 }
 
 function truncate(text: string, maxLen: number): string {
