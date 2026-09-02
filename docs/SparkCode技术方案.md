@@ -1041,7 +1041,9 @@ $ARGUMENTS
 spark-code/
 ├── package.json
 ├── tsconfig.json
-├── README.md
+├── README.md                  # 项目说明
+├── README.txt                 # 提交用（≤1000 汉字）
+├── LICENSE                    # MIT 许可证
 ├── .env.example               # SPARK_OPENAI_API_KEY=sk-xxx（不入库）
 ├── src/
 │   ├── index.ts               # 入口：spark 命令
@@ -1094,8 +1096,8 @@ spark-code/
 | **M4 上下文** | token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | ✅ 已完成 | Day 7-8 |
 | **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | ✅ 已完成 | Day 9 |
 | **M6 交互增强** | 命令系统重构 + 模型切换（`/model`）+ 自定义 Skill（`/skill-name`）+ 模式切换（Normal/Plan/Auto）+ Effort 级别 + Tab 补全（详见 `docs/M6-交互增强技术方案.md`） | `/model` 切换模型、`/plan` 只读分析、`/effort high` 深度推理、自定义 skill 执行、Tab 补全命令 | ✅ 已完成 | Day 10-14 |
-| **M7 TUI** | Inline TUI：底部状态栏 + 欢迎横幅 + Braille spinner + 代码块折叠 + 工具调用卡片 + Markdown 渲染 + 输入历史（详见 `docs/M7-TUI技术方案.md`） | 交互体验对齐 PaiCLI Inline 模式 | ⬜ | Day 15-17 |
-| **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | ⬜ | Day 18-19 |
+| **M7 TUI** | Inline TUI：底部状态栏 + 欢迎横幅 + Braille spinner + 代码块折叠 + 工具调用卡片 + Markdown 渲染 + 输入历史（详见 `docs/M7-TUI技术方案.md`） | 交互体验对齐 PaiCLI Inline 模式 | ✅ 已完成 | Day 15-17 |
+| **M8 收尾** | README.md + README.txt（≤1000字）+ MIT LICENSE + 演示视频脚本 + 技术方案更新 | 提交物齐全 | ✅ 已完成 | Day 18-19 |
 
 ### M1→M2 调整说明
 
@@ -1160,8 +1162,13 @@ npm run spark -- --resume latest   # 恢复最近会话
 npm test
 ```
 
-### 12.3 演示视频脚本建议（2 分钟）
-1. **0:00-0:15** 开场：展示 `spark "新建一个 Express 服务并写一个 /health 接口"` 的实时流式过程
-2. **0:15-1:00** 聚焦：agent 自动 `read` 现有代码 → `edit` 修改 → `bash npm test` 运行 → 根据失败反馈自我修正
-3. **1:00-1:30** 展示 Web 界面：同样任务在浏览器中的工具卡片、diff 视图
-4. **1:30-2:00** 简要讲解：事件日志 + 循环 + 工具管道三个核心设计（配一张架构图）
+### 12.3 演示视频脚本
+
+详见 `docs/演示视频脚本.md`。整体结构：
+
+1. **0:00-0:10** 开场：启动 Spark Code，展示欢迎横幅 + 状态栏
+2. **0:10-0:25** 提出任务：输入一个真实编程任务（如创建 Express 服务 + 测试）
+3. **0:25-1:10** Agent 自主执行：自动编码 → 安装依赖 → 运行测试 → 根据失败修复 → 通过
+4. **1:10-1:30** 交互特性：Ctrl+O 展开代码块、/model 切换、Tab 补全
+5. **1:30-1:50** 架构简述：事件日志 + 工具注册表 + UI 纯函数
+6. **1:50-2:00** 结尾
