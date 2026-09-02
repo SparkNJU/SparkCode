@@ -31,6 +31,7 @@ import { ActivityDisplay } from './ui/activity-display.js'
 import { FoldableBlock } from './ui/foldable-block.js'
 import { BlockRegistry } from './ui/block-registry.js'
 import { InlineRenderer } from './ui/inline-renderer.js'
+import { loadHistory, appendHistory } from './ui/history.js'
 import { groupToolCalls, collapsedHeader, expandedLines, type ToolCallInput } from './ui/tool-call-renderer.js'
 
 async function main(): Promise<void> {
@@ -295,6 +296,14 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
     completer,
   })
 
+  // 加载命令历史（~/.spark/history/input.history）
+  // Node readline 的 history 数组存在但 TypeScript 类型未声明
+  const historyLines = loadHistory()
+  const rlWithHistory = rl as readline.Interface & { history: string[] }
+  for (const line of historyLines.reverse()) {
+    rlWithHistory.history.push(line)
+  }
+
   let interruptCount = 0
 
   // Ctrl+C 处理
@@ -343,6 +352,9 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
       const trimmed = input.trim()
       if (!trimmed) continue
       if (trimmed === '/exit' || trimmed === '/quit') break
+
+      // 持久化命令历史
+      appendHistory(trimmed)
 
       // M6: 命令系统处理
       const commandCtx = {

@@ -1046,10 +1046,12 @@ if (input === '\x0F') {  // Ctrl+O
 - [x] 重构 `setupEventRendering`：assistant/chunk → inlineRenderer.write()，turn/start → reset()，step/end → flush()
 - [x] InlineRenderer 集成到事件管道，替换直接 stdout.write
 
-### Phase 6：Markdown + 高亮（day 3）
-- [ ] `markdown.ts` — 终端 Markdown 渲染
-- [ ] `input-highlighter.ts` — 输入着色
-- [ ] `history.ts` — 历史持久化
+### Phase 6：Markdown + 高亮（day 3）✅
+- [x] `markdown.ts` — 终端 Markdown 渲染（renderInline 行内着色 + renderMarkdown 块级渲染：标题、列表、引用、表格、代码块边框）
+- [x] `input-highlighter.ts` — 输入着色（/command cyan bold，!shell yellow）
+- [x] `history.ts` — 历史持久化（~/.spark/history，最大2000条，过滤敏感信息）
+- [x] 集成到 InlineRenderer：非代码块行自动 renderInline 着色
+- [x] 集成到 REPL：启动时 loadHistory → readline，每次输入后 appendHistory
 
 ### Phase 7：集成 + 测试（day 3-4）
 - [ ] 重构 `index.ts` 主循环
