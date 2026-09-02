@@ -1035,10 +1035,11 @@ if (input === '\x0F') {  // Ctrl+O
 ### Phase 3：活动动画（day 2）✅
 - [x] `activity-display.ts` — Braille spinner + reasoning
 
-### Phase 4：工具调用 + 折叠（day 2-3）
-- [ ] `foldable-block.ts` — 可折叠块
-- [ ] `block-registry.ts` — 注册表 + Ctrl+O
-- [ ] `tool-call-renderer.ts` — 工具调用格式化
+### Phase 4：工具调用 + 折叠（day 2-3）✅
+- [x] `foldable-block.ts` — 可折叠块
+- [x] `block-registry.ts` — 注册表 + Ctrl+O
+- [x] `tool-call-renderer.ts` — 工具调用格式化
+- [x] 集成到 `setupEventRendering`：tool/call 缓冲 → step/end 刷出 FoldableBlock
 
 ### Phase 5：流式渲染器（day 3）
 - [ ] `inline-renderer.ts` — 代码块折叠状态机

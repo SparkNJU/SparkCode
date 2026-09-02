@@ -8,3 +8,6 @@ export { heading, section, subtle, thinking, codeLabel, error, emphasis, quotePr
 export { StatusBar, type StatusData } from './status-bar.js'
 export { printBanner, type BannerInfo } from './banner.js'
 export { ActivityDisplay } from './activity-display.js'
+export { FoldableBlock } from './foldable-block.js'
+export { BlockRegistry } from './block-registry.js'
+export { groupToolCalls, collapsedHeader, expandedLines, toolLabel, toolCollapsedLabel, extractKeyParam, type ToolCallInput } from './tool-call-renderer.js'

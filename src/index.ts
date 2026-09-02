@@ -28,6 +28,9 @@ import { createCompleter, buildPrompt } from './ui/index.js'
 import { StatusBar, type StatusData } from './ui/status-bar.js'
 import { printBanner } from './ui/banner.js'
 import { ActivityDisplay } from './ui/activity-display.js'
+import { FoldableBlock } from './ui/foldable-block.js'
+import { BlockRegistry } from './ui/block-registry.js'
+import { groupToolCalls, collapsedHeader, expandedLines, type ToolCallInput } from './ui/tool-call-renderer.js'
 
 async function main(): Promise<void> {
   // 1. 解析配置
@@ -325,7 +328,7 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   })
 
   // 事件渲染
-  setupEventRendering(agent, config, statusBar, activityDisplay)
+  const blockRegistry = setupEventRendering(agent, config, statusBar, activityDisplay)
 
   // REPL 循环
   while (true) {
@@ -402,8 +405,22 @@ function setupEventRendering(
   config: SparkConfig,
   statusBar: StatusBar,
   activityDisplay: ActivityDisplay,
-): void {
+): BlockRegistry {
   const ctx = agent.ctx
+  const blockRegistry = new BlockRegistry()
+  const pendingToolCalls: ToolCallInput[] = []
+
+  /** 将缓冲的工具调用刷出为 FoldableBlock */
+  function flushToolCalls(): void {
+    if (pendingToolCalls.length === 0) return
+    const grouped = groupToolCalls(pendingToolCalls)
+    const header = collapsedHeader(grouped)
+    const expanded = expandedLines(grouped)
+    const block = new FoldableBlock(header, expanded)
+    blockRegistry.register(block)
+    block.renderInitial()
+    pendingToolCalls.length = 0
+  }
 
   // assistant/chunk → 流式打印文本 + reasoning 动画
   ctx.events.on<{ turn: number; step: number; chunk: { kind: string; text?: string } }>(
@@ -422,20 +439,18 @@ function setupEventRendering(
     },
   )
 
-  // tool/call → 工具调用提示（结束思考动画）
-  ctx.events.on<{ name: string; arguments: string }>(
+  // tool/call → 缓冲工具调用（结束思考动画）
+  ctx.events.on<{ turn: number; step: number; callId: string; name: string; arguments: string }>(
     'tool/call',
     (data) => {
       if (activityDisplay.isActive()) {
         activityDisplay.end()
       }
-      const color = config.noColor ? '' : '\x1b[36m'
-      const reset = config.noColor ? '' : '\x1b[0m'
-      stdout.write(`\n${color}🔧 ${data.name}(${truncate(data.arguments, 100)})${reset}\n`)
+      pendingToolCalls.push({ name: data.name, arguments: data.arguments })
     },
   )
 
-  // tool/result → 工具结果
+  // tool/result → 工具结果（即时反馈，不折叠）
   ctx.events.on<{ message: { content: string; isError: boolean } }>(
     'tool/result',
     (data) => {
@@ -448,10 +463,19 @@ function setupEventRendering(
     },
   )
 
-  // turn/end → 结束动画 + 错误提示（状态栏在回合结束后由 REPL 主循环打印）
+  // step/end → 将缓冲的工具调用刷出为 FoldableBlock
+  ctx.events.on<{ turn: number; step: number }>(
+    'step/end',
+    () => {
+      flushToolCalls()
+    },
+  )
+
+  // turn/end → 结束动画 + 错误提示 + 安全兜底 flush
   ctx.events.on<{ turn: number; reason: { kind: string } }>(
     'turn/end',
     (data) => {
+      flushToolCalls()
       if (activityDisplay.isActive()) {
         activityDisplay.end()
       }
@@ -462,6 +486,8 @@ function setupEventRendering(
       }
     },
   )
+
+  return blockRegistry
 }
 
 function truncate(text: string, maxLen: number): string {
