@@ -258,6 +258,11 @@ export class SparkAgent implements Agent {
   ): any {
     const event = this.session.append(type, data, options)
     this.writer?.write(event as SessionEvent)
+    // 广播到事件总线（供 TUI / Web 实时渲染）
+    // 注意：assistant/chunk 在 streamWithRetry 中单独 emit，此处不重复
+    if (type !== 'assistant/chunk') {
+      this.ctx.emit(type, data)
+    }
     return event
   }
 

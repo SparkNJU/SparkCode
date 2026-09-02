@@ -3,6 +3,26 @@
 import { spawn } from 'node:child_process'
 import type { ToolDefinition, ToolResult, ToolRunContext } from './types.js'
 
+/**
+ * 创建 shell 输出的解码器
+ * Windows cmd 使用系统活动代码页（中文 = GBK/CP936），需用 TextDecoder 解码
+ * Unix 系统默认 UTF-8，直接用 Buffer.toString('utf-8')
+ */
+function createShellDecoder(): { decode: (buf: Buffer) => string } {
+  if (process.platform !== 'win32') {
+    return { decode: (buf: Buffer) => buf.toString('utf-8') }
+  }
+  // 支持环境变量覆盖：SPARK_SHELL_ENCODING=gbk|utf-8|...
+  const enc = process.env.SPARK_SHELL_ENCODING || 'gbk'
+  try {
+    const decoder = new TextDecoder(enc)
+    return { decode: (buf: Buffer) => decoder.decode(buf) }
+  } catch {
+    // TextDecoder 不支持该编码时回退 UTF-8
+    return { decode: (buf: Buffer) => buf.toString('utf-8') }
+  }
+}
+
 export const bashTool: ToolDefinition = {
   schema: {
     type: 'function',
@@ -58,13 +78,14 @@ async function runForeground(
 
   let stdout = ''
   let stderr = ''
+  const decoder = createShellDecoder()
 
   proc.stdout.on('data', (data: Buffer) => {
-    stdout += data.toString()
+    stdout += decoder.decode(data)
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    stderr += data.toString()
+    stderr += decoder.decode(data)
   })
 
   // 取消支持：abort → kill 进程

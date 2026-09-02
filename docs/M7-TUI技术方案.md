@@ -92,6 +92,54 @@ src/ui/
 
 ## 3. 详细设计
 
+### 3.0 ANSI 样式隔离规则（核心设计约束）
+
+**问题**：stderr 和 stdout 共享同一个终端的 ANSI 状态机。某个流设置的样式属性（粗体、暗淡、颜色）会影响另一个流的后续输出，除非被显式重置。
+
+**已知陷阱**：
+
+| 陷阱 | 原因 | 表现 |
+|------|------|------|
+| chalk 选择性重置 | `chalk.dim.gray('x')` 生成 `\x1B[2m\x1B[90mx\x1B[22m\x1B[39m`，`\x1B[22m` 只关闭 dim，`\x1B[39m` 只关闭前景色 | 后续无样式文本仍继承其他属性（如背景色、粗体） |
+| stderr 样式泄漏到 stdout | ActivityDisplay 向 stderr 写入 dim+gray，清除后终端 ANSI 状态仍残留 | 模型正文内容变成灰色 |
+| 部分重置不完整 | `\x1B[22m`（关 dim）+ `\x1B[39m`（关颜色）≠ `\x1B[0m`（全量重置） | 样式残留累积 |
+
+**正确规则（所有 TUI 模块必须遵守）**：
+
+1. **禁止使用 chalk**：chalk 生成选择性重置（`\x1B[22m`、`\x1B[39m`），不完全清除样式状态。所有样式必须用原始 ANSI 转义序列 + `\x1B[0m` 全量重置。
+
+2. **每个样式段必须闭合**：任何设置了样式的代码段，必须在段末写入 `\x1B[0m`。
+   ```
+   ✅ \x1B[2m\x1B[90m灰色文本\x1B[0m
+   ❌ \x1B[2m\x1B[90m灰色文本      ← 样式泄漏
+   ```
+
+3. **stderr 写入后必须重置**：写入 stderr 的带样式内容，在最后一次写入时必须以 `\x1B[0m` 结尾。因为接下来 stdout 会继续写入，终端的 ANSI 状态是共享的。
+   ```typescript
+   // ActivityDisplay.clearRendered() 示例
+   process.stderr.write(moveUp(1) + CLEAR_LINE)  // 清除行
+   process.stderr.write('\x1B[0m')                // 重置，防止泄漏到 stdout
+   ```
+
+4. **stdout 写入前可防御性重置**：从 styled 切换到 unstyled 时，在 stdout 写入前加 `\x1B[0m`。
+   ```typescript
+   // 从 stderr 动画切换到 stdout 正文
+   activityDisplay.end()  // 内部已写 \x1B[0m
+   stdout.write(content)  // 正文不会继承灰色
+   ```
+
+5. **状态栏 / 动画等临时样式组件，必须实现 cleanup**：任何写入 stderr 的带样式组件（StatusBar、ActivityDisplay），必须有 `end()` / `clear()` 方法，清除已渲染行并写入 `\x1B[0m`。
+
+6. **常量定义**：在 `status-bar.ts` / `activity-display.ts` 顶部定义颜色常量，每个段末尾显式使用 `R`（`\x1B[0m`）闭合。
+   ```typescript
+   const R = '\x1B[0m'       // 全量重置（唯一可信的重置方式）
+   const DIM = '\x1B[2m'
+   const GRAY = '\x1B[90m'
+   const BOLD = '\x1B[1m'
+   const CYAN = '\x1B[36m'
+   // 用法：`${DIM}${GRAY}文本${R}`  ← 段末必闭合
+   ```
+
 ### 3.1 `ansi.ts` — ANSI 常量与光标控制
 
 对标 PaiCLI 的 `AnsiSeq.java`：
@@ -984,8 +1032,8 @@ if (input === '\x0F') {  // Ctrl+O
 - [x] `banner.ts` — SPARK ASCII art 欢迎屏
 - [x] 集成到 `runRepl`
 
-### Phase 3：活动动画（day 2）
-- [ ] `activity-display.ts` — Braille spinner + reasoning
+### Phase 3：活动动画（day 2）✅
+- [x] `activity-display.ts` — Braille spinner + reasoning
 
 ### Phase 4：工具调用 + 折叠（day 2-3）
 - [ ] `foldable-block.ts` — 可折叠块

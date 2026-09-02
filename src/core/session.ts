@@ -6,6 +6,7 @@ import type { LlmFailure } from './error.js'
 
 export type ContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'tool-call'; id: string; name: string; arguments: string }
   | { type: 'tool-result'; callId: string; content: string; isError: boolean }
 
@@ -42,6 +43,7 @@ export interface TokenUsage {
 
 export type StreamChunk =
   | { kind: 'content'; text: string }
+  | { kind: 'reasoning'; text: string }
   | { kind: 'tool-call-part'; index: number; id?: string; name?: string; argsFragment: string }
   | { kind: 'finish'; reason: string | null; usage?: TokenUsage }
 

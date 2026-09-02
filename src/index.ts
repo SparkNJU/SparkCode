@@ -27,6 +27,7 @@ import { CommandRegistry, registerBuiltinCommands, registerModelCommand, registe
 import { createCompleter, buildPrompt } from './ui/index.js'
 import { StatusBar, type StatusData } from './ui/status-bar.js'
 import { printBanner } from './ui/banner.js'
+import { ActivityDisplay } from './ui/activity-display.js'
 
 async function main(): Promise<void> {
   // 1. 解析配置
@@ -310,6 +311,9 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   // M7: 创建状态栏
   const statusBar = new StatusBar()
 
+  // M7: 创建活动动画（Braille spinner + reasoning 预览）
+  const activityDisplay = new ActivityDisplay()
+
   // M7: 打印欢迎横幅（对标 PaiCLI installStartupScreen）
   printBanner({
     model: agent.currentModel,
@@ -321,7 +325,7 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   })
 
   // 事件渲染
-  setupEventRendering(agent, config, statusBar)
+  setupEventRendering(agent, config, statusBar, activityDisplay)
 
   // REPL 循环
   while (true) {
@@ -393,23 +397,38 @@ function refreshStatusBar(statusBar: StatusBar, agent: SparkAgent, config: Spark
 }
 
 /** 设置事件渲染（纯函数渲染，与 Web 共用逻辑） */
-function setupEventRendering(agent: SparkAgent, config: SparkConfig, statusBar: StatusBar): void {
+function setupEventRendering(
+  agent: SparkAgent,
+  config: SparkConfig,
+  statusBar: StatusBar,
+  activityDisplay: ActivityDisplay,
+): void {
   const ctx = agent.ctx
 
-  // assistant/chunk → 流式打印文本
+  // assistant/chunk → 流式打印文本 + reasoning 动画
   ctx.events.on<{ turn: number; step: number; chunk: { kind: string; text?: string } }>(
     'assistant/chunk',
     (data) => {
-      if (data.chunk.kind === 'content' && data.chunk.text) {
+      if (data.chunk.kind === 'reasoning' && data.chunk.text) {
+        // reasoning 内容 → Braille spinner + 预览
+        activityDisplay.appendThinking(data.chunk.text)
+      } else if (data.chunk.kind === 'content' && data.chunk.text) {
+        // 正文开始 → 结束思考动画（end() 内部会写 \x1B[0m 重置 stderr 残留样式）
+        if (activityDisplay.isActive()) {
+          activityDisplay.end()
+        }
         stdout.write(data.chunk.text)
       }
     },
   )
 
-  // tool/call → 工具调用提示
+  // tool/call → 工具调用提示（结束思考动画）
   ctx.events.on<{ name: string; arguments: string }>(
     'tool/call',
     (data) => {
+      if (activityDisplay.isActive()) {
+        activityDisplay.end()
+      }
       const color = config.noColor ? '' : '\x1b[36m'
       const reset = config.noColor ? '' : '\x1b[0m'
       stdout.write(`\n${color}🔧 ${data.name}(${truncate(data.arguments, 100)})${reset}\n`)
@@ -429,10 +448,13 @@ function setupEventRendering(agent: SparkAgent, config: SparkConfig, statusBar: 
     },
   )
 
-  // turn/end → 错误提示（状态栏在回合结束后由 REPL 主循环打印）
+  // turn/end → 结束动画 + 错误提示（状态栏在回合结束后由 REPL 主循环打印）
   ctx.events.on<{ turn: number; reason: { kind: string } }>(
     'turn/end',
     (data) => {
+      if (activityDisplay.isActive()) {
+        activityDisplay.end()
+      }
       if (data.reason.kind === 'error') {
         const color = config.noColor ? '' : '\x1b[31m'
         const reset = config.noColor ? '' : '\x1b[0m'

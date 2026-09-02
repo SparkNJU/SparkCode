@@ -7,3 +7,4 @@ export { getTerminalSize, supportsAnsi, supportsTrueColor, supportsStatusBar, ty
 export { heading, section, subtle, thinking, codeLabel, error, emphasis, quotePrefix, success, warn, userMessageBlock, displayWidth, stripAnsi } from './style.js'
 export { StatusBar, type StatusData } from './status-bar.js'
 export { printBanner, type BannerInfo } from './banner.js'
+export { ActivityDisplay } from './activity-display.js'

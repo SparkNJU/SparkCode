@@ -84,6 +84,12 @@ export async function* streamModel(
     const delta = part.choices[0]?.delta
     if (!delta) continue
 
+    // reasoning_content 增量（DeepSeek-R1 / QwQ 等推理模型）
+    const reasoningContent = (delta as any).reasoning_content
+    if (reasoningContent) {
+      yield { kind: 'reasoning', text: reasoningContent }
+    }
+
     // content 增量
     if (delta.content) {
       yield { kind: 'content', text: delta.content }
@@ -113,12 +119,16 @@ export async function* streamModel(
 
 export class BlockAssembler {
   private contentParts: string[] = []
+  private reasoningParts: string[] = []
   private toolParts = new Map<number, { id?: string; name?: string; args: string }>()
   private finishReason: string | null = null
 
   /** 喂入一个 chunk */
   feed(chunk: StreamChunk): void {
     switch (chunk.kind) {
+      case 'reasoning':
+        this.reasoningParts.push(chunk.text)
+        break
       case 'content':
         this.contentParts.push(chunk.text)
         break
@@ -142,6 +152,11 @@ export class BlockAssembler {
   /** 完成组装，返回 ContentBlock 数组 */
   finish(): { content: ContentBlock[]; finishReason: string | null } {
     const blocks: ContentBlock[] = []
+
+    // reasoning 块（推理模型的思考过程）
+    if (this.reasoningParts.length > 0) {
+      blocks.push({ type: 'reasoning', text: this.reasoningParts.join('') })
+    }
 
     // 文本块
     if (this.contentParts.length > 0) {
