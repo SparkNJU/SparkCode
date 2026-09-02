@@ -207,6 +207,7 @@ export class InlineRenderer {
     this.renderedRows = 0
     this.lastOutputBlank = false
     this.needsLineBreakBeforeNextBlock = false
+    this.blockRegistry.clear()
   }
 
   /** 当前是否在代码块中 */

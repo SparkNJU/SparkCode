@@ -1054,9 +1054,11 @@ if (input === '\x0F') {  // Ctrl+O
 - [x] 集成到 REPL：启动时 loadHistory → readline，每次输入后 appendHistory
 
 ### Phase 7：集成 + 测试（day 3-4）
-- [ ] 重构 `index.ts` 主循环
-- [ ] 快捷键绑定
-- [ ] 整体测试
+- [x] 快捷键绑定：Ctrl+O → `inlineRenderer.toggleLastBlock()`，Esc → Ctrl+U 清空输入行
+- [x] 重构 `index.ts`：提取 `setupKeyBindings` 函数处理原始按键事件
+- [x] 整体集成测试：`npm run spark` 手动验证欢迎屏、状态栏、Markdown 渲染、代码块折叠、Ctrl+O、命令历史
+- [x] reset() 同时清空 BlockRegistry（新回合不保留旧折叠块）
+- [x] 121 个单元测试全部通过
 
 ---
 
@@ -1064,22 +1066,22 @@ if (input === '\x0F') {  // Ctrl+O
 
 | 功能 | PaiCLI | SparkCode M7 | 状态 |
 |------|--------|-------------|------|
-| 欢迎屏幕（ASCII art） | ✅ Pi symbol | ✅ S symbol | 规划 |
-| 底部状态栏（2 行 dock） | ✅ JLine Status | ✅ 顶部状态栏（原地覆写，不漂移） | 规划 |
-| 思考 spinner（Braille） | ✅ InlineActivityDisplay | ✅ ActivityDisplay | 规划 |
-| 推理预览（4 行） | ✅ │ prefix | ✅ │ prefix | 规划 |
-| 进度条（活动模式） | ✅ ▰▱ bar | ✅ ▰▱ bar | 规划 |
-| 代码块折叠 | ✅ FoldableBlock | ✅ FoldableBlock | 规划 |
-| Ctrl+O 展开/折叠 | ✅ toggleLastBlock | ✅ toggleLastBlock | 规划 |
-| 工具调用折叠块 | ✅ ToolCallRenderer | ✅ ToolCallRenderer | 规划 |
-| 用户消息块（紫色背景） | ✅ userMessageBlock | ✅ userMessageBlock | 规划 |
-| 上下文进度条（8 字符） | ✅ ctx ████████░░ | ✅ ctx ████████░░ | 规划 |
-| Token 格式化 | ✅ X.Xk / X.XM | ✅ X.Xk / X.XM | 规划 |
-| Markdown 渲染 | ✅ TerminalMarkdownRenderer | ✅ MarkdownRenderer | 规划 |
-| 输入历史（持久化） | ✅ PaiCliHistory | ✅ ~/.spark/history | 规划 |
-| Tab 补全 | ✅ PaiCliCompleter | ✅ completer.ts | 已有 |
-| 输入高亮 | ✅ PaiCliHighlighter | ⚠️ 简化版 | 规划 |
-| Esc 清空输入 | ✅ | ✅ | 规划 |
+| 欢迎屏幕（ASCII art） | ✅ Pi symbol | ✅ S symbol | ✅ |
+| 底部状态栏（2 行 dock） | ✅ JLine Status | ✅ 顶部状态栏（原地覆写，不漂移） | ✅ |
+| 思考 spinner（Braille） | ✅ InlineActivityDisplay | ✅ ActivityDisplay | ✅ |
+| 推理预览（4 行） | ✅ │ prefix | ✅ │ prefix | ✅ |
+| 进度条（活动模式） | ✅ ▰▱ bar | ✅ ▰▱ bar | ✅ |
+| 代码块折叠 | ✅ FoldableBlock | ✅ FoldableBlock | ✅ |
+| Ctrl+O 展开/折叠 | ✅ toggleLastBlock | ✅ toggleLastBlock | ✅ |
+| 工具调用折叠块 | ✅ ToolCallRenderer | ✅ ToolCallRenderer | ✅ |
+| 用户消息块（紫色背景） | ✅ userMessageBlock | ✅ userMessageBlock | ❌ |
+| 上下文进度条（8 字符） | ✅ ctx ████████░░ | ✅ ctx ████████░░ | ❌ |
+| Token 格式化 | ✅ X.Xk / X.XM | ✅ X.Xk / X.XM | ❌ |
+| Markdown 渲染 | ✅ TerminalMarkdownRenderer | ✅ MarkdownRenderer | ✅ |
+| 输入历史（持久化） | ✅ PaiCliHistory | ✅ ~/.spark/history | ✅ |
+| Tab 补全 | ✅ PaiCliCompleter | ✅ completer.ts | ✅ |
+| 输入高亮 | ✅ PaiCliHighlighter | ⚠️ 简化版 | ✅ |
+| Esc 清空输入 | ✅ | ✅ | ✅ |
 | Ctrl+V 粘贴图片 | ✅ | ❌ 不实现 | — |
 | Lanterna 全屏模式 | ✅ | ❌ 不实现 | — |
 | Slash Palette（↑↓选择） | ✅ SlashPalette | ❌ 不实现 | — |

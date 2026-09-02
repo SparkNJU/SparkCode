@@ -340,6 +340,9 @@ async function runRepl(agent: SparkAgent, config: SparkConfig): Promise<void> {
   // 事件渲染
   const inlineRenderer = setupEventRendering(agent, config, statusBar, activityDisplay)
 
+  // M7: 快捷键绑定（对标 PaiCLI KeyBindingHandler / Ctrl+O toggleLastBlock / Esc 清空输入）
+  setupKeyBindings(stdin, rl, inlineRenderer)
+
   // REPL 循环
   while (true) {
     try {
@@ -512,6 +515,33 @@ function setupEventRendering(
   )
 
   return inlineRenderer
+}
+
+/** M7: 快捷键绑定（对标 PaiCLI KeyBindingHandler）
+ *  readline.createInterface({ terminal: true }) 已启用 raw mode + emitKeypressEvents。
+ *  我们在同一个 stdin 上监听 keypress 事件，与 readline 并行处理。
+ */
+function setupKeyBindings(
+  input: NodeJS.ReadableStream,
+  rl: readline.Interface,
+  inlineRenderer: InlineRenderer,
+): void {
+  // readline 已经调用了 emitKeypressEvents，直接监听即可
+  input.on('keypress', (_ch: string, key: { name?: string; ctrl?: boolean; meta?: boolean } | undefined) => {
+    if (!key) return
+
+    // Ctrl+O → 切换最后一个折叠块（对标 PaiCLI toggleLastBlock）
+    if (key.name === 'o' && key.ctrl) {
+      inlineRenderer.toggleLastBlock()
+      return
+    }
+
+    // Esc → 清空当前输入行（对标 PaiCLI Esc 清空输入）
+    if (key.name === 'escape') {
+      // 发送 Ctrl+U 给 readline 清除当前行（Unix 标准快捷键）
+      rl.write(null, { name: 'u', ctrl: true })
+    }
+  })
 }
 
 function truncate(text: string, maxLen: number): string {
