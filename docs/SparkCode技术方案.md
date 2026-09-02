@@ -1094,7 +1094,7 @@ spark-code/
 | **M4 上下文** | token 计量 + 工具结果裁剪 + 摘要压缩 | 长对话不爆上下文 | ✅ 已完成 | Day 7-8 |
 | **M5 持久化** | JSONL 落盘 + 恢复/续接 | 重启后 `spark --resume` 接续会话 | ✅ 已完成 | Day 9 |
 | **M6 交互增强** | 命令系统重构 + 模型切换（`/model`）+ 自定义 Skill（`/skill-name`）+ 模式切换（Normal/Plan/Auto）+ Effort 级别 + Tab 补全（详见 `docs/M6-交互增强技术方案.md`） | `/model` 切换模型、`/plan` 只读分析、`/effort high` 深度推理、自定义 skill 执行、Tab 补全命令 | ✅ 已完成 | Day 10-14 |
-| **M7 TUI** | 全屏 TUI：消息区 + 输入框 + 状态栏 + 工具卡片 + Markdown 渲染 + ASCII 横幅（详见 `docs/TUI设计方案.md`） | 交互体验对齐 Claude Code | ⬜ | Day 15-17 |
+| **M7 TUI** | Inline TUI：底部状态栏 + 欢迎横幅 + Braille spinner + 代码块折叠 + 工具调用卡片 + Markdown 渲染 + 输入历史（详见 `docs/M7-TUI技术方案.md`） | 交互体验对齐 PaiCLI Inline 模式 | ⬜ | Day 15-17 |
 | **M8 收尾** | 测试、README.txt、演示视频脚本、Git 仓库整理 | 提交物齐全 | ⬜ | Day 18-19 |
 
 ### M1→M2 调整说明
