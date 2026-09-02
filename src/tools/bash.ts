@@ -4,22 +4,34 @@ import { spawn } from 'node:child_process'
 import type { ToolDefinition, ToolResult, ToolRunContext } from './types.js'
 
 /**
- * 创建 shell 输出的解码器
- * Windows cmd 使用系统活动代码页（中文 = GBK/CP936），需用 TextDecoder 解码
- * Unix 系统默认 UTF-8，直接用 Buffer.toString('utf-8')
+ * 创建 shell 输出的流式解码器
+ *
+ * 使用 TextDecoder + { stream: true } 确保多字节字符（如 UTF-8 中文）
+ * 跨 buffer chunk 边界时不会被截断。
+ *
+ * Windows 默认 UTF-8（现代 Windows Terminal / PowerShell 均输出 UTF-8）。
+ * 可通过 SPARK_SHELL_ENCODING 环境变量覆盖（如 gbk）。
  */
-function createShellDecoder(): { decode: (buf: Buffer) => string } {
-  if (process.platform !== 'win32') {
-    return { decode: (buf: Buffer) => buf.toString('utf-8') }
-  }
-  // 支持环境变量覆盖：SPARK_SHELL_ENCODING=gbk|utf-8|...
-  const enc = process.env.SPARK_SHELL_ENCODING || 'gbk'
+function createShellDecoder(): {
+  /** 流式解码（每个 chunk 调用，自动缓冲不完整的尾部字节） */
+  decodeStream: (buf: Buffer) => string
+  /** 结束时刷新剩余缓冲字节 */
+  flush: () => string
+} {
+  const enc = process.env.SPARK_SHELL_ENCODING || 'utf-8'
   try {
     const decoder = new TextDecoder(enc)
-    return { decode: (buf: Buffer) => decoder.decode(buf) }
+    return {
+      decodeStream: (buf: Buffer) => decoder.decode(buf, { stream: true }),
+      flush: () => decoder.decode(), // 无参数 = 刷新缓冲
+    }
   } catch {
     // TextDecoder 不支持该编码时回退 UTF-8
-    return { decode: (buf: Buffer) => buf.toString('utf-8') }
+    const decoder = new TextDecoder('utf-8')
+    return {
+      decodeStream: (buf: Buffer) => decoder.decode(buf, { stream: true }),
+      flush: () => decoder.decode(),
+    }
   }
 }
 
@@ -81,11 +93,11 @@ async function runForeground(
   const decoder = createShellDecoder()
 
   proc.stdout.on('data', (data: Buffer) => {
-    stdout += decoder.decode(data)
+    stdout += decoder.decodeStream(data)
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    stderr += decoder.decode(data)
+    stderr += decoder.decodeStream(data)
   })
 
   // 取消支持：abort → kill 进程
@@ -112,6 +124,10 @@ async function runForeground(
     proc.on('close', (code) => resolve(code))
     proc.on('error', () => resolve(null))
   })
+
+  // 刷新解码器缓冲区（处理末尾不完整的多字节字符）
+  stdout += decoder.flush()
+  stderr += decoder.flush()
 
   clearTimeout(timer)
   ctx.signal.removeEventListener('abort', onAbort)
